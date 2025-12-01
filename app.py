@@ -1,18 +1,24 @@
 import streamlit as st
 from utils import read_sheet
 
-st.set_page_config(page_title="Prueba Google Sheets", layout="wide")
+st.title("🔍 Diagnóstico de Google Sheets")
 
-st.title("🔧 Prueba de conexión con Google Sheets")
-
-st.write("Intentando acceder a la hoja 'mantenimientos'...")
+st.write("Probando acceso a Google Sheets…")
 
 try:
-    data = read_sheet("mantenimientos")
-    st.success("✅ Google Sheets funciona correctamente")
-    st.write("Datos recibidos:")
+    # Intento de lectura simple
+    data = read_sheet("config")
+    st.success("✔ Conectado correctamente a Google Sheets.")
     st.write(data)
 
 except Exception as e:
     st.error("❌ Error al acceder a Google Sheets")
-    st.code(str(e))
+
+    st.write("### 🔎 Error COMPLETO detectado:")
+    st.code(repr(e))  # <-- imprime todo, siempre
+
+    # Más diagnóstico
+    import traceback
+    full = traceback.format_exc()
+    st.write("### 📄 Traceback completo:")
+    st.code(full)
