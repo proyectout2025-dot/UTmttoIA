@@ -28,3 +28,4 @@ try:
     st.success("La escritura funcionó.")
 except Exception as e:
     st.error(f"Error al escribir: {e}")
+
