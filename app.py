@@ -1,3 +1,12 @@
+st.write("Probando acceso a Google Sheets...")
+
+try:
+    from utils import read_sheet
+    data = read_sheet("mantenimientos")
+    st.success("Google Sheets funciona correctamente")
+    st.write(data)
+except Exception as e:
+    st.error(f"Error: {e}")
 import streamlit as st
 from openai import OpenAI
 from utils import read_sheet, append_sheet, upload_file_to_drive
@@ -107,3 +116,4 @@ with tab4:
 
     data_refacciones = read_sheet("refacciones")
     st.dataframe(data_refacciones, use_container_width=True)
+
