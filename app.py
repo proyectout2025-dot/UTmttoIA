@@ -1,115 +1,109 @@
 import streamlit as st
-from utils import read_sheet, append_sheet, upload_file_to_drive
 from openai import OpenAI
-import datetime
-import io
+from utils import read_sheet, append_sheet, upload_file_to_drive
 
 st.set_page_config(page_title="Sistema Integral", layout="wide")
-client = OpenAI()
-
-# -----------------------------
-# TABS
-# -----------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["Chat del Manual", "Manuales", "Mantenimientos", "Refacciones"])
-
 
 # -------------------------------------------------------
-# TAB 1 - CHAT DEL MANUAL
+#  OPENAI CLIENT
+# -------------------------------------------------------
+client = OpenAI(api_key=st.secrets["openai"]["api_key"])
+
+# -------------------------------------------------------
+#  TABS
+# -------------------------------------------------------
+tab1, tab2, tab3, tab4 = st.tabs(["🤖 Chatbot", "📄 Manuales", "🛠 Mantenimientos", "🔧 Refacciones"])
+
+# -------------------------------------------------------
+# 1. CHATBOT
 # -------------------------------------------------------
 with tab1:
-    st.header("Chat del Manual")
+    st.header("Asistente basado en IA")
 
-    pregunta = st.text_area("Haz una pregunta sobre el manual:")
+    st.write("Haz preguntas sobre el manual cargado. El sistema responderá basado en su contenido.")
+
+    pregunta = st.text_area("Escribe tu pregunta")
 
     if st.button("Preguntar"):
-        respuesta = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": "Eres un asistente experto en manuales técnicos."},
-                {"role": "user", "content": pregunta}
-            ]
-        ).choices[0].message["content"]
-
-        st.write("### Respuesta:")
-        st.write(respuesta)
+        if pregunta.strip() == "":
+            st.warning("Escribe una pregunta antes de continuar.")
+        else:
+            with st.spinner("Analizando..."):
+                respuesta = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "Eres un asistente técnico experto en máquinas industriales. Responde con precisión basado en manuales del cliente."},
+                        {"role": "user", "content": pregunta}
+                    ],
+                )
+                st.success("Respuesta:")
+                st.write(respuesta.choices[0].message.content)
 
 
 # -------------------------------------------------------
-# TAB 2 - MANUALES
+# 2. MANUALES
 # -------------------------------------------------------
 with tab2:
-    st.header("Cargar Manual")
+    st.header("📄 Manuales Disponibles")
+    st.write("Aquí puedes subir nuevos manuales en PDF o ver los existentes.")
 
-    pdf = st.file_uploader("Sube un manual en PDF", type="pdf")
+    pdf = st.file_uploader("Cargar manual en PDF", type=["pdf"])
 
     if pdf:
-        file_bytes = pdf.read()
-        uploaded = upload_file_to_drive(io.BytesIO(file_bytes), pdf.name)
-
-        st.success("Manual subido correctamente.")
-        st.json(uploaded)
+        url = upload_file_to_drive(pdf)
+        st.success("Manual cargado correctamente!")
+        st.write("🔗 **Enlace al PDF:**")
+        st.write(url)
 
 
 # -------------------------------------------------------
-# TAB 3 - MANTENIMIENTOS
+# 3. MANTENIMIENTOS
 # -------------------------------------------------------
 with tab3:
-    st.header("Registro de Mantenimientos")
-
-    df = read_sheet("mantenimientos")
-    st.dataframe(df)
+    st.header("🛠 Registro de Mantenimientos")
 
     st.subheader("Agregar mantenimiento")
 
-    equipo = st.text_input("Equipo")
-    descripcion = st.text_area("Descripción")
-    realizado = st.text_input("Realizado por")
-    imagen = st.file_uploader("foto", type=["jpg", "png"])
+    col1, col2 = st.columns(2)
 
-    if st.button("Guardar"):
-        row = {
-            "id": len(df) + 1,
-            "fecha": str(datetime.date.today()),
-            "equipo": equipo,
-            "descripcion": descripcion,
-            "realizado_por": realizado,
-            "imagen_url": "",
-            "estatus": "completado",
-            "timestamp_registro": str(datetime.datetime.now())
-        }
+    with col1:
+        fecha = st.date_input("Fecha del mantenimiento")
+        descripcion = st.text_area("Descripción del trabajo realizado")
 
-        append_sheet("mantenimientos", row)
-        st.success("Mantenimiento guardado.")
+    with col2:
+        tecnico = st.text_input("Técnico responsable")
+        imagen = st.file_uploader("Foto (opcional)", type=["png", "jpg", "jpeg"])
+
+    if st.button("Guardar mantenimiento"):
+        if descripcion.strip() == "" or tecnico.strip() == "":
+            st.warning("Los campos de descripción y técnico son obligatorios.")
+        else:
+            url_foto = upload_file_to_drive(imagen) if imagen else ""
+
+            append_sheet(
+                "mantenimientos",
+                [
+                    str(fecha),
+                    descripcion,
+                    tecnico,
+                    url_foto
+                ]
+            )
+
+            st.success("Mantenimiento registrado correctamente.")
+
+    st.divider()
+    st.subheader("Historial de mantenimientos")
+
+    data = read_sheet("mantenimientos")
+    st.dataframe(data, use_container_width=True)
 
 
 # -------------------------------------------------------
-# TAB 4 - REFACCIONES
+# 4. REFACCIONES
 # -------------------------------------------------------
 with tab4:
-    st.header("Inventario de Refacciones")
+    st.header("🔧 Inventario de Refacciones")
 
-    df2 = read_sheet("refacciones")
-    st.dataframe(df2)
-
-    st.subheader("Agregar refacción")
-
-    num_parte = st.text_input("Número de parte")
-    cliente = st.text_input("Parte del cliente")
-    descripcion = st.text_input("Descripción")
-    cantidad = st.number_input("Cantidad", 0)
-    locacion = st.text_input("Locación")
-
-    if st.button("Agregar refacción"):
-        row2 = {
-            "id": len(df2) + 1,
-            "numero_parte": num_parte,
-            "parte_cliente": cliente,
-            "descripcion": descripcion,
-            "cantidad_existente": cantidad,
-            "locacion": locacion,
-            "imagen_url": "",
-            "timestamp_registro": str(datetime.datetime.now())
-        }
-
-        append_sheet("refacciones", row2)
-        st.success("Refacción agregada.")
+    data_refacciones = read_sheet("refacciones")
+    st.dataframe(data_refacciones, use_container_width=True)
