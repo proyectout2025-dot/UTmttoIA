@@ -1,30 +1,31 @@
 import streamlit as st
+import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 
-# -----------------------------------------------------
-# OBTENER HOJA DE GOOGLE SHEETS
-# -----------------------------------------------------
-def get_gsheet(sheet_name):
-    creds_dict = st.secrets["google_service_account"]
+# Autenticación Google Sheets
+scope = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
-    creds = Credentials.from_service_account_info(
-        creds_dict,
-        scopes=[
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ],
-    )
+creds = Credentials.from_service_account_info(
+    st.secrets["gcp_service_account"], scopes=scope
+)
 
-    client = gspread.authorize(creds)
+gc = gspread.authorize(creds)
 
-    sheet = client.open_by_url(st.secrets["sheets"]["sheet_url"])
+# Abrir documento
+SPREADSHEET_ID = st.secrets["spreadsheet_id"]
+sh = gc.open_by_key(SPREADSHEET_ID)
 
-    return sheet.worksheet(sheet_name)
 
-# -----------------------------------------------------
-# LEER HOJA COMPLETA
-# -----------------------------------------------------
-def read_sheet(sheet_name):
-    ws = get_gsheet(sheet_name)
-    return ws.get_all_records()
+def get_sheet(sheet_name):
+    ws = sh.worksheet(sheet_name)
+    data = ws.get_all_records()
+    return pd.DataFrame(data)
+
+
+def add_mantenimiento(values: dict):
+    ws = sh.worksheet("mantenimientos")
+    ws.append_row(list(values.values()))
