@@ -1,25 +1,19 @@
 import streamlit as st
-from utils import get_sheet, add_mantenimiento
-from tabs.mantenimiento import mantenimiento_tab
+from tabs.mantenimientos import show_mantenimientos
+from tabs.refacciones import show_refacciones
+from tabs.config import show_config
 
-st.set_page_config(page_title="UTM Mantenimiento IA", layout="wide")
+st.set_page_config(page_title="Sistema de Mantenimiento", layout="wide")
 
-# Cargar hojas
-tabs = {
-    "Mantenimientos": "mantenimientos",
-    "Refacciones": "refacciones",
-    "Configuración": "config"
-}
+st.title("📘 Sistema de Mantenimiento Industrial")
 
-sheet_dict = {}
-for name, sheet_name in tabs.items():
-    try:
-        sheet_dict[name] = get_sheet(sheet_name)
-    except Exception:
-        sheet_dict[name] = None
+tabs = st.tabs(["🛠 Mantenimientos", "🔧 Refacciones", "⚙️ Config"])
 
-# UI Tabs
-menu = st.sidebar.radio("Menú", list(tabs.keys()))
+with tabs[0]:
+    show_mantenimientos()
 
-if menu == "Mantenimientos":
-    mantenimiento_tab(sheet_dict["Mantenimientos"])
+with tabs[1]:
+    show_refacciones()
+
+with tabs[2]:
+    show_config()
