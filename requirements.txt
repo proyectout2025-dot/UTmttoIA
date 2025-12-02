@@ -7,3 +7,4 @@ google-auth-httplib2
 pandas
 openai
 pypdf2
+google-api-python-client
