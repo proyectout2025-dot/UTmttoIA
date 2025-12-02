@@ -1,72 +1,86 @@
 import streamlit as st
-import gspread
-from google.oauth2.service_account import Credentials
+from openai import OpenAI
+from utils import read_sheet, append_sheet
 
-# ==========================
-# 1. CONFIGURACIÓN INICIAL
-# ==========================
+st.set_page_config(page_title="Chat – Mantenimiento", layout="wide")
 
-st.set_page_config(page_title="App Mantenimiento", layout="wide")
+# Inicializar cliente OpenAI
+client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
-st.title("📋 Sistema de Mantenimiento – Panel Principal")
+# -----------------------------
+# TAB 1: CHATBOT
+# -----------------------------
+st.title("🤖 Chatbot basado en tu manual")
 
-# Conexión con Google Sheets
-def get_connection():
-    try:
-        creds = Credentials.from_service_account_info(
-            st.secrets["gcp_service_account"],
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
-        )
-        client = gspread.authorize(creds)
-        sheet = client.open_by_url(st.secrets["sheets"]["sheet_url"])
-        return sheet
-    except Exception as e:
-        st.error(f"❌ Error al conectar con Google Sheets:\n{e}")
-        return None
+manual_text = st.session_state.get("manual_text", None)
 
+# Cargar el manual desde Google Sheet pestaña "config"
+config = read_sheet("config")
+if config is not None and len(config) > 0:
+    manual_text = config.at[0, "manual"]
+    st.session_state["manual_text"] = manual_text
 
-# Leer una hoja específica
-def read_sheet(sheet_name):
-    try:
-        sheet = get_connection()
-        if sheet is None:
-            return None
+if not manual_text:
+    st.warning("⚠️ No hay manual cargado todavía. Ve a la pestaña CONFIG para subir uno.")
+else:
+    user_query = st.text_input("¿Qué deseas preguntar sobre el manual?")
 
-        ws = sheet.worksheet(sheet_name)
-        data = ws.get_all_records()
-        return data
-    except Exception as e:
-        st.error(f"❌ No se pudo leer la hoja '{sheet_name}':\n{e}")
-        return None
+    if user_query:
+        with st.spinner("Consultando IA..."):
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"Eres un asistente experto en mantenimiento. Responde únicamente con base en este manual:\n\n{manual_text}"
+                    },
+                    {"role": "user", "content": user_query}
+                ]
+            )
+            answer = response.choices[0].message["content"]
+            st.success(answer)
 
+# -----------------------------
+# TAB 2: MANUAL
+# -----------------------------
+st.header("📘 Manual cargado")
 
-# ==========================
-# 2. MENÚ LATERAL
-# ==========================
+if manual_text:
+    st.text_area("Contenido del manual:", manual_text, height=300)
+else:
+    st.info("No hay manual cargado aún.")
 
-menu = st.sidebar.radio(
-    "Selecciona una sección:",
-    ["Mantenimientos", "Refacciones", "Config"]
-)
+# -----------------------------
+# TAB 3: MANTENIMIENTOS
+# -----------------------------
+st.header("🛠 Registrar mantenimiento")
 
-# ==========================
-# 3. MOSTRAR HOJAS
-# ==========================
+with st.form("mnt_form"):
+    fecha = st.date_input("Fecha")
+    tarea = st.text_input("Descripción del mantenimiento")
+    tecnico = st.text_input("Técnico responsable")
 
-if menu == "Mantenimientos":
-    st.header("🛠 Mantenimientos")
-    data = read_sheet("mantenimientos")
-    if data:
-        st.dataframe(data, use_container_width=True)
+    enviar = st.form_submit_button("Guardar")
 
-elif menu == "Refacciones":
-    st.header("🔩 Refacciones")
-    data = read_sheet("refacciones")
-    if data:
-        st.dataframe(data, use_container_width=True)
+if enviar:
+    append_sheet("mantenimientos", [str(fecha), tarea, tecnico])
+    st.success("✔ Mantenimiento guardado")
 
-elif menu == "Config":
-    st.header("⚙️ Configuración")
-    data = read_sheet("config")
-    if data:
-        st.dataframe(data, use_container_width=True)
+# Mostrar historial
+st.subheader("📄 Historial de mantenimientos")
+mnt = read_sheet("mantenimientos")
+if mnt is not None:
+    st.dataframe(mnt)
+else:
+    st.info("No hay registros aún.")
+
+# -----------------------------
+# TAB 4: REFACCIONES
+# -----------------------------
+st.header("🔩 Refacciones")
+
+ref = read_sheet("refacciones")
+if ref is not None:
+    st.dataframe(ref)
+else:
+    st.info("No hay refacciones registradas todavía.")
