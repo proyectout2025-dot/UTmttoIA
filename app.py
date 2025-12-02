@@ -1,86 +1,58 @@
 import streamlit as st
-from openai import OpenAI
-from utils import read_sheet, append_sheet
+import gspread
+import pandas as pd
+from oauth2client.service_account import ServiceAccountCredentials
 
-st.set_page_config(page_title="Chat – Mantenimiento", layout="wide")
+# ---------------------------------------------------
+# AUTENTICACIÓN GOOGLE SERVICE ACCOUNT
+# ---------------------------------------------------
+def get_gsheet(sheet_name):
+    try:
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
 
-# Inicializar cliente OpenAI
-client = OpenAI(api_key=st.secrets["openai"]["api_key"])
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(
+            st.secrets["gcp_service_account"], scope
+        )
 
-# -----------------------------
-# TAB 1: CHATBOT
-# -----------------------------
-st.title("🤖 Chatbot basado en tu manual")
+        client = gspread.authorize(creds)
 
-manual_text = st.session_state.get("manual_text", None)
+        sheet_url = st.secrets["sheets"]["sheet_url"]
+        ss = client.open_by_url(sheet_url)
 
-# Cargar el manual desde Google Sheet pestaña "config"
-config = read_sheet("config")
-if config is not None and len(config) > 0:
-    manual_text = config.at[0, "manual"]
-    st.session_state["manual_text"] = manual_text
+        return ss.worksheet(sheet_name)
 
-if not manual_text:
-    st.warning("⚠️ No hay manual cargado todavía. Ve a la pestaña CONFIG para subir uno.")
-else:
-    user_query = st.text_input("¿Qué deseas preguntar sobre el manual?")
+    except Exception as e:
+        st.error(f"❌ Error al conectar con Google Sheets: {e}")
+        return None
 
-    if user_query:
-        with st.spinner("Consultando IA..."):
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": f"Eres un asistente experto en mantenimiento. Responde únicamente con base en este manual:\n\n{manual_text}"
-                    },
-                    {"role": "user", "content": user_query}
-                ]
-            )
-            answer = response.choices[0].message["content"]
-            st.success(answer)
+# ---------------------------------------------------
+# LEER DATOS
+# ---------------------------------------------------
+def read_sheet(sheet_name):
+    ws = get_gsheet(sheet_name)
+    if ws is None:
+        return None
 
-# -----------------------------
-# TAB 2: MANUAL
-# -----------------------------
-st.header("📘 Manual cargado")
+    try:
+        data = ws.get_all_records()
+        return pd.DataFrame(data)
+    except:
+        return None
 
-if manual_text:
-    st.text_area("Contenido del manual:", manual_text, height=300)
-else:
-    st.info("No hay manual cargado aún.")
+# ---------------------------------------------------
+# INSERTAR FILAS
+# ---------------------------------------------------
+def append_sheet(sheet_name, row):
+    ws = get_gsheet(sheet_name)
+    if ws is None:
+        return None
 
-# -----------------------------
-# TAB 3: MANTENIMIENTOS
-# -----------------------------
-st.header("🛠 Registrar mantenimiento")
-
-with st.form("mnt_form"):
-    fecha = st.date_input("Fecha")
-    tarea = st.text_input("Descripción del mantenimiento")
-    tecnico = st.text_input("Técnico responsable")
-
-    enviar = st.form_submit_button("Guardar")
-
-if enviar:
-    append_sheet("mantenimientos", [str(fecha), tarea, tecnico])
-    st.success("✔ Mantenimiento guardado")
-
-# Mostrar historial
-st.subheader("📄 Historial de mantenimientos")
-mnt = read_sheet("mantenimientos")
-if mnt is not None:
-    st.dataframe(mnt)
-else:
-    st.info("No hay registros aún.")
-
-# -----------------------------
-# TAB 4: REFACCIONES
-# -----------------------------
-st.header("🔩 Refacciones")
-
-ref = read_sheet("refacciones")
-if ref is not None:
-    st.dataframe(ref)
-else:
-    st.info("No hay refacciones registradas todavía.")
+    try:
+        ws.append_row(row)
+        return True
+    except Exception as e:
+        st.error(f"❌ Error al guardar en Google Sheets: {e}")
+        return False
