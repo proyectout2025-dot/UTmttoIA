@@ -1,17 +1,15 @@
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 import pandas as pd
-import io
 from datetime import datetime
 
+# ======================================================
+#                AUTENTICACIÓN GOOGLE
+# ======================================================
 
-# ==========================
-#  AUTENTICACIÓN GOOGLE
-# ==========================
 def get_gs_client():
+    """Autentica Google Sheets."""
     try:
         creds_dict = st.secrets["gcp_service_account"]
 
@@ -19,48 +17,36 @@ def get_gs_client():
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
-
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
         return client
+
     except Exception as e:
         st.error(f"❌ Error autenticando Google: {e}")
         return None
 
 
-def get_drive_service():
-    try:
-        creds_dict = st.secrets["gcp_service_account"]
-
-        scopes = ["https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-
-        service = build("drive", "v3", credentials=creds)
-        return service
-    except Exception as e:
-        st.error(f"❌ Error creando servicio de Drive: {e}")
-        return None
-
-
-# ==========================
-#   GOOGLE SHEETS
-# ==========================
 SHEET_URL = st.secrets["sheets"]["sheet_url"]
 
 
+# ======================================================
+#                FUNCIONES DE GOOGLE SHEETS
+# ======================================================
+
 def read_sheet(worksheet_name):
+    """Lee una hoja completa como lista de dicts."""
     try:
         client = get_gs_client()
         sh = client.open_by_url(SHEET_URL)
         ws = sh.worksheet(worksheet_name)
-        data = ws.get_all_records()
-        return data
+        return ws.get_all_records()
     except Exception as e:
         st.error(f"❌ Error leyendo Google Sheets ({worksheet_name}): {e}")
-        return None
+        return []
 
 
 def append_row(worksheet_name, row):
+    """Agrega una fila a una hoja."""
     try:
         client = get_gs_client()
         sh = client.open_by_url(SHEET_URL)
@@ -72,14 +58,12 @@ def append_row(worksheet_name, row):
         return False
 
 
-# ==========================
-#   CHECK-IN / CHECK-OUT
-# ==========================
+# ======================================================
+#                CHECK-IN / CHECK-OUT
+# ======================================================
+
 def get_active_checkins():
-    data = read_sheet("checkin_activos")
-    if not data:
-        return []
-    return data
+    return read_sheet("checkin_activos")
 
 
 def add_active_checkin(equipo, realizado_por):
@@ -90,69 +74,114 @@ def add_active_checkin(equipo, realizado_por):
 
 def finalize_active_checkin(equipo):
     activos = read_sheet("checkin_activos")
-    if not activos:
-        return None
-
     now = datetime.now()
 
     for entry in activos:
         if entry["equipo"] == equipo:
             inicio = datetime.strptime(entry["hora_inicio"], "%Y-%m-%d %H:%M:%S")
             horas = round((now - inicio).total_seconds() / 3600, 2)
-            fin = now.strftime("%Y-%m-%d %H:%M:%S")
-            return horas, entry["realizado_por"], entry["hora_inicio"], fin
+            hora_fin = now.strftime("%Y-%m-%d %H:%M:%S")
+            return horas, entry["realizado_por"], entry["hora_inicio"], hora_fin
 
     return None
 
 
-# ==========================
-#   GOOGLE DRIVE UPLOAD
-# ==========================
-def upload_file_to_drive(file, folder_name="Refacciones"):
-    """
-    Sube un archivo a Google Drive dentro de una carpeta.
-    Si la carpeta no existe, la crea.
-    Devuelve el ID del archivo subido.
-    """
+# ======================================================
+#                INTERFAZ PRINCIPAL
+# ======================================================
+
+def show_mantenimientos():
+
+    st.header("🛠 Registro de Mantenimientos")
+
+    st.subheader("⏱ Tiempo (Check-in / Check-out)")
+    equipos = ["Torno", "Fresadora", "Router CNC", "Soldadora", "Impresora 3D"]
+
+    equipo_sel = st.selectbox("Equipo", equipos)
+    realizado_por = st.text_input("Realizado por")
+
+    activos = get_active_checkins()
+    activo = next((a for a in activos if a["equipo"] == equipo_sel), None)
+
+    col1, col2 = st.columns(2)
+
+    if activo:
+        # Ya tiene check-in
+        col1.success(f"⚡ Check-in iniciado: {activo['hora_inicio']}")
+
+        if col2.button("⛔ Finalizar (Check-out)"):
+            result = finalize_active_checkin(equipo_sel)
+            if result:
+                horas, persona, hora_ini, hora_fin = result
+
+                append_row("mantenimientos", [
+                    datetime.now().strftime("%Y-%m-%d"),
+                    equipo_sel,
+                    "Mantenimiento automático por Checkout",
+                    persona,
+                    "completado",
+                    horas,
+                    hora_ini,
+                    hora_fin
+                ])
+                st.success("✔ Tiempo registrado correctamente.")
+                st.rerun()
+    else:
+        # No tiene check-in
+        if col1.button("▶ Iniciar Check-in"):
+            if not realizado_por:
+                st.warning("⚠ Debes capturar quién realiza el mantenimiento.")
+            else:
+                add_active_checkin(equipo_sel, realizado_por)
+                st.success("⏱ Check-in iniciado.")
+                st.rerun()
+
+    st.divider()
+
+    # ======================================================
+    #                REGISTRO MANUAL
+    # ======================================================
+
+    st.subheader("📝 Registro manual")
+
+    fecha = st.date_input("Fecha")
+    descripcion = st.text_area("Descripción")
+    status = st.selectbox("Estatus", ["pendiente", "en proceso", "completado"])
+    horas = st.number_input("Horas trabajadas", 0.0, 100.0, 0.0)
+    hora_ini = st.text_input("Hora inicio (YYYY-mm-dd HH:MM:SS)")
+    hora_fin = st.text_input("Hora fin   (YYYY-mm-dd HH:MM:SS)")
+
+    if st.button("💾 Guardar manual"):
+        append_row("mantenimientos", [
+            str(fecha),
+            equipo_sel,
+            descripcion,
+            realizado_por,
+            status,
+            horas,
+            hora_ini,
+            hora_fin
+        ])
+        st.success("✔ Mantenimiento guardado correctamente.")
+
+    st.divider()
+
+    # ======================================================
+    #                TABLE + GRÁFICAS
+    # ======================================================
+
+    st.subheader("📊 Reportes de Mantenimientos")
+
+    data = read_sheet("mantenimientos")
+    if not data:
+        st.info("No hay datos aún")
+        return
+
+    df = pd.DataFrame(data)
+    st.dataframe(df)
+
     try:
-        service = get_drive_service()
-
-        # 1️⃣ Buscar carpeta existente
-        query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder'"
-        results = (
-            service.files()
-            .list(q=query, spaces="drive", fields="files(id, name)")
-            .execute()
-        )
-        items = results.get("files", [])
-
-        # 2️⃣ Crear carpeta si no existe
-        if not items:
-            file_metadata = {
-                "name": folder_name,
-                "mimeType": "application/vnd.google-apps.folder",
-            }
-            folder = service.files().create(body=file_metadata, fields="id").execute()
-            folder_id = folder.get("id")
-        else:
-            folder_id = items[0]["id"]
-
-        # 3️⃣ Subir archivo
-        file_metadata = {
-            "name": file.name,
-            "parents": [folder_id]
-        }
-
-        media = MediaIoBaseUpload(io.BytesIO(file.read()), mimetype=file.type)
-
-        uploaded = (
-            service.files()
-            .create(body=file_metadata, media_body=media, fields="id")
-            .execute()
-        )
-
-        return uploaded.get("id")
-
-    except Exception as e:
-        st.error(f"❌ Error subiendo archivo a Drive: {e}")
-        return None
+        horas_equipo = df.groupby("Equipo")["tiempo_hrs"].sum()
+        st.bar_chart(horas_equipo)
+    except:
+        st.warning("⚠ No se pudo generar gráfica (columnas incorrectas).")
