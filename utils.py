@@ -1,50 +1,62 @@
 import gspread
 from google.oauth2.service_account import Credentials
-import streamlit as st
-import pandas as pd
 
-# ----------------------------
-# AUTENTICACIÓN GOOGLE SHEETS
-# ----------------------------
-
-def get_gsheet_client():
+# -----------------------------------------------------------
+# CONFIGURACIÓN DE GOOGLE SHEETS
+# -----------------------------------------------------------
+def get_client():
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
+    credentials = Credentials.from_service_account_file("service_account.json", scopes=scopes)
+    return gspread.authorize(credentials)
 
-    creds = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
-        scopes=scopes
+# -----------------------------------------------------------
+# LEER UNA HOJA DE CÁLCULO
+# -----------------------------------------------------------
+def read_sheet(sheet_name, worksheet_name):
+    client = get_client()
+    sheet = client.open(sheet_name)
+    worksheet = sheet.worksheet(worksheet_name)
+    return worksheet.get_all_records()
+
+# -----------------------------------------------------------
+# AGREGAR DATOS A UNA HOJA
+# -----------------------------------------------------------
+def append_sheet(sheet_name, worksheet_name, values):
+    client = get_client()
+    sheet = client.open(sheet_name)
+    worksheet = sheet.worksheet(worksheet_name)
+    worksheet.append_row(values)
+
+# -----------------------------------------------------------
+# SUBIR ARCHIVO A GOOGLE DRIVE
+# -----------------------------------------------------------
+def upload_file_to_drive(file, drive_folder_id):
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload
+    import io
+
+    scopes = ["https://www.googleapis.com/auth/drive"]
+    credentials = Credentials.from_service_account_file("service_account.json", scopes=scopes)
+    service = build("drive", "v3", credentials=credentials)
+
+    file_metadata = {
+        "name": file.name,
+        "parents": [drive_folder_id],
+    }
+
+    media = MediaIoBaseUpload(
+        io.BytesIO(file.getvalue()),
+        mimetype=file.type,
+        resumable=True
     )
 
-    return gspread.authorize(creds)
+    uploaded_file = service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields="id"
+    ).execute()
 
-# ----------------------------
-# OBTENER HOJA DE CÁLCULO
-# ----------------------------
-
-def get_gsheet(sheet_name):
-    client = get_gsheet_client()
-    spreadsheet_url = st.secrets["sheets"]["sheet_url"]
-
-    sheet = client.open_by_url(spreadsheet_url)
-    worksheet = sheet.worksheet(sheet_name)
-    return worksheet
-
-# ----------------------------
-# LEER DATOS DE GOOGLE SHEETS
-# ----------------------------
-
-def read_sheet(sheet_name):
-    ws = get_gsheet(sheet_name)
-    data = ws.get_all_records()
-    return pd.DataFrame(data)
-
-# ----------------------------
-# AGREGAR FILA A GOOGLE SHEETS
-# ----------------------------
-
-def append_sheet(sheet_name, row_values):
-    ws = get_gsheet(sheet_name)
-    ws.append_row(row_values)
+    return uploaded_file.get("id")
