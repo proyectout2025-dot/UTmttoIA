@@ -1,115 +1,106 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from datetime import datetime
 
 from utils import (
     read_sheet,
-    get_active_checkins,
+    append_sheet,
     add_active_checkin,
-    close_checkin
+    get_active_checkins,
+    finalize_active_checkin,
 )
 
-SPREADSHEET = "base_datos_app"
-SHEET = "mantenimientos"
 
-
-# -----------------------------
-#  Cargar datos
-# -----------------------------
-def load_data():
-    data = read_sheet(SPREADSHEET, SHEET)
-    if not data:
-        return pd.DataFrame()
-    return pd.DataFrame(data)
-
-
-# -----------------------------
-#  INTERFAZ PRINCIPAL
-# -----------------------------
 def show_mantenimientos():
-    st.header("🛠 Mantenimientos — Registro y Reportes")
 
-    df = load_data()
+    st.title("🛠 Mantenimientos - Registro y Dashboard")
 
-    # -----------------------------
-    #  1. REGISTROS ACTIVOS
-    # -----------------------------
-    st.subheader("⏳ Mantenimientos Activos (Check-in)")
+    st.subheader("➕ Registrar mantenimiento manual")
 
-    activos = get_active_checkins(SPREADSHEET)
+    with st.form("manual_form"):
+        fecha = st.date_input("Fecha")
+        equipo = st.text_input("Equipo")
+        descripcion = st.text_area("Descripción")
+        realizado_por = st.text_input("Realizado por")
+        estatus = st.selectbox("Estatus", ["Terminado", "En proceso", "Pendiente"])
+        tiempo_hrs = st.number_input("Tiempo (hrs)", min_value=0.0)
+        hora_inicio = st.time_input("Hora inicio")
+        hora_fin = st.time_input("Hora fin")
 
-    if activos:
-        st.write(pd.DataFrame(activos.values()))
+        enviar = st.form_submit_button("Guardar mantenimiento")
+
+        if enviar:
+            row = {
+                "Fecha": str(fecha),
+                "Equipo": equipo,
+                "Descripcion": descripcion,
+                "Realizado_por": realizado_por,
+                "estatus": estatus,
+                "tiempo_hrs": tiempo_hrs,
+                "hora_inicio": hora_inicio.strftime("%H:%M:%S"),
+                "hora_fin": hora_fin.strftime("%H:%M:%S"),
+            }
+
+            append_sheet("mantenimientos", row)
+            st.success("Guardado correctamente.")
+            st.rerun()
+
+    st.divider()
+
+    # ======================= CHECK-IN / OUT ==============================
+
+    st.subheader("⏱ Registrar tiempo — CHECK-IN / CHECK-OUT")
+
+    with st.expander("🔵 Check-In"):
+        with st.form("checkin_form"):
+            eq = st.text_input("Equipo")
+            desc = st.text_area("Descripción")
+            rp = st.text_input("Realizado por")
+
+            if st.form_submit_button("Iniciar Check-In"):
+                add_active_checkin(eq, desc, rp)
+                st.success("Check-in iniciado.")
+                st.rerun()
+
+    st.subheader("🔴 Activos en Check-In:")
+    activos = get_active_checkins()
+
+    if not activos.empty:
+        st.dataframe(activos)
+
+        idx = st.number_input("ID del check-in a cerrar", min_value=0, max_value=len(activos)-1)
+        est = st.selectbox("Estatus final", ["Terminado", "Cancelado"])
+
+        if st.button("Finalizar Check-Out"):
+            fila = activos.iloc[idx].to_dict()
+            finalize_active_checkin(fila, est)
+            st.success("Check-out finalizado.")
+            st.rerun()
     else:
         st.info("No hay check-ins activos.")
 
     st.divider()
 
-    # -----------------------------
-    #  2. INICIAR CHECK-IN
-    # -----------------------------
-    st.subheader("✔ Iniciar mantenimiento (Check-in)")
+    # ======================= DASHBOARD ==============================
 
-    equipos_lista = ["Equipo 1", "Equipo 2", "Equipo 3", "Otro"]
+    st.header("📊 Dashboard")
 
-    equipo = st.selectbox("Equipo", equipos_lista)
-    realizado_por = st.text_input("Realizado por")
-
-    if st.button("🚀 Iniciar Check-in"):
-        if not realizado_por:
-            st.warning("Ingresa el nombre del técnico.")
-        else:
-            add_active_checkin(SPREADSHEET, equipo, realizado_por)
-            st.success("Check-in iniciado.")
-            st.rerun()
-
-    st.divider()
-
-    # -----------------------------
-    #  3. FINALIZAR CHECK-IN
-    # -----------------------------
-    st.subheader("📌 Finalizar mantenimiento (Check-out)")
-
-    if activos:
-        equipo_fin = st.selectbox("Equipo en trabajo", list(activos.keys()))
-        descripcion = st.text_area("Descripción del trabajo realizado")
-        estatus = st.selectbox("Estatus final", ["Completado", "Pendiente", "Cancelado"])
-
-        if st.button("✔ Finalizar Check-out"):
-            close_checkin(SPREADSHEET, equipo_fin, descripcion, estatus)
-            st.success("Mantenimiento registrado correctamente.")
-            st.rerun()
-    else:
-        st.info("No hay mantenimientos activos para finalizar.")
-
-    st.divider()
-
-    # -----------------------------
-    #  4. HISTORIAL
-    # -----------------------------
-    st.subheader("📚 Historial de Mantenimientos")
+    df = read_sheet("mantenimientos")
 
     if df.empty:
-        st.info("Aún no hay historial.")
-    else:
-        st.dataframe(df)
+        st.warning("No hay registros aún.")
+        return
 
-    st.divider()
+    st.subheader("Horas por equipo")
 
-    # -----------------------------
-    #  5. REPORTES Y GRÁFICAS
-    # -----------------------------
-    st.subheader("📊 Reporte de tiempos (horas)")
+    horas = df.groupby("Equipo")["tiempo_hrs"].sum()
 
-    if not df.empty:
-        horas = df.groupby("equipo")["tiempo_hrs"].sum()
+    fig, ax = plt.subplots()
+    horas.plot(kind="bar", ax=ax)
+    ax.set_ylabel("Horas")
+    ax.set_title("Tiempo acumulado por equipo")
 
-        fig, ax = plt.subplots()
-        horas.plot(kind="bar", ax=ax)
-        ax.set_title("Horas totales por equipo")
-        ax.set_ylabel("Horas")
+    st.pyplot(fig)
 
-        st.pyplot(fig)
-    else:
-        st.info("No hay datos suficientes para gráficas.")
+    st.subheader("Tabla completa")
+    st.dataframe(df)
