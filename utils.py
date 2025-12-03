@@ -1,173 +1,179 @@
-# utils.py
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime, timezone
-import pandas as pd
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+from datetime import datetime
+import io
 
-# -------------------------
-# Configuración
-# -------------------------
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
 
-def _get_client():
-    creds_info = st.secrets["gcp_service_account"]
-    creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
-    return gspread.authorize(creds)
-
-# -------------------------
-# Leer hoja -> DataFrame
-# -------------------------
-def read_sheet(spreadsheet_name: str, worksheet_name: str) -> pd.DataFrame:
-    """Lee worksheet y retorna DataFrame (vacío si hay problema)."""
+# ================================================================
+#   AUTENTICACIÓN GOOGLE
+# ================================================================
+def _get_credentials(scopes):
+    """Obtiene credenciales desde st.secrets."""
     try:
-        client = _get_client()
-        sh = client.open(spreadsheet_name)
-        ws = sh.worksheet(worksheet_name)
-        rows = ws.get_all_records()
-        return pd.DataFrame(rows)
+        creds_dict = st.secrets["gcp_service_account"]
+        return Credentials.from_service_account_info(creds_dict, scopes=scopes)
     except Exception as e:
-        st.error(f"❌ Error leyendo Google Sheets '{worksheet_name}': {e}")
-        return pd.DataFrame()
+        st.error(f"❌ Error cargando credenciales: {e}")
+        return None
 
-# -------------------------
-# Append con orden de encabezados
-# -------------------------
-def append_sheet(spreadsheet_name: str, worksheet_name: str, row_dict: dict) -> bool:
-    """
-    Añade una fila. row_dict keys deben coincidir con los encabezados de la hoja.
-    Se respeta el orden de encabezados en la hoja.
-    """
+
+def get_gs_client():
+    """Cliente autenticado para Google Sheets."""
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    creds = _get_credentials(scopes)
+    if not creds:
+        return None
     try:
-        client = _get_client()
-        sh = client.open(spreadsheet_name)
-        ws = sh.worksheet(worksheet_name)
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"❌ Error autorizando Google Sheets: {e}")
+        return None
 
-        headers = ws.row_values(1)
-        row = [row_dict.get(h, "") for h in headers]
-        ws.append_row(row, value_input_option="USER_ENTERED")
+
+def get_drive_service():
+    """Servicio autenticado de Google Drive."""
+    scopes = ["https://www.googleapis.com/auth/drive"]
+    creds = _get_credentials(scopes)
+    if not creds:
+        return None
+
+    try:
+        return build("drive", "v3", credentials=creds)
+    except Exception as e:
+        st.error(f"❌ Error creando servicio de Drive: {e}")
+        return None
+
+
+# ================================================================
+#   GOOGLE SHEETS
+# ================================================================
+SHEET_URL = st.secrets["sheets"]["sheet_url"]
+
+
+def read_sheet(worksheet_name):
+    """Lee registros de una hoja por nombre."""
+    try:
+        client = get_gs_client()
+        sh = client.open_by_url(SHEET_URL)
+        ws = sh.worksheet(worksheet_name)
+        data = ws.get_all_records()
+        return data
+    except Exception as e:
+        st.error(f"❌ Error leyendo Google Sheets ({worksheet_name}): {e}")
+        return None
+
+
+def append_row(worksheet_name, row):
+    """Agrega una fila a una hoja."""
+    try:
+        client = get_gs_client()
+        sh = client.open_by_url(SHEET_URL)
+        ws = sh.worksheet(worksheet_name)
+        ws.append_row(row)
         return True
     except Exception as e:
-        st.error(f"❌ Error guardando en '{worksheet_name}': {e}")
+        st.error(f"❌ Error guardando en Google Sheets ({worksheet_name}): {e}")
         return False
 
-# -------------------------
-# Helpers para checkin_activos
-# -------------------------
-CHECKIN_SHEET = "checkin_activos"
-MANT_SHEET = "mantenimientos"
 
-def get_active_checkins(spreadsheet_name: str):
-    """
-    Devuelve lista de dicts de checkins activos con campo adicional '_row' = número de fila real.
-    """
-    try:
-        client = _get_client()
-        sh = client.open(spreadsheet_name)
-        ws = sh.worksheet(CHECKIN_SHEET)
-        all_values = ws.get_all_values()
-        if len(all_values) < 2:
-            return []
-        headers = all_values[0]
-        records = []
-        for i, row in enumerate(all_values[1:], start=2):
-            # map row into dict
-            row_dict = {headers[j]: row[j] if j < len(row) else "" for j in range(len(headers))}
-            row_dict["_row"] = i
-            records.append(row_dict)
-        return records
-    except Exception as e:
-        # si la hoja no existe o está vacía devolvemos lista vacía
-        st.info(f"(get_active_checkins) {e}")
-        return []
+# ================================================================
+#   CHECK-IN / CHECK-OUT
+# ================================================================
+def get_active_checkins():
+    """Obtiene check-ins activos."""
+    data = read_sheet("checkin_activos")
+    return data if data else []
 
-def add_active_checkin(spreadsheet_name: str, equipo: str, descripcion: str, realizado_por: str) -> bool:
-    """
-    Añade un check-in a la hoja CHECKIN_SHEET.
-    Encabezados esperados en checkin_activos: Fecha, Equipo, Descripcion, Realizado_por, hora_inicio
-    """
-    now = datetime.now(timezone.utc).astimezone().replace(tzinfo=None)  # naive local
-    hora_inicio = now.strftime("%Y-%m-%d %H:%M:%S")
-    row = {
-        "Fecha": now.strftime("%Y-%m-%d"),
-        "Equipo": equipo,
-        "Descripcion": descripcion,
-        "Realizado_por": realizado_por,
-        "hora_inicio": hora_inicio
-    }
-    return append_sheet(spreadsheet_name, CHECKIN_SHEET, row)
 
-def delete_row_by_index(spreadsheet_name: str, worksheet_name: str, row_number: int) -> bool:
-    """Elimina una fila por número (1-based)."""
-    try:
-        client = _get_client()
-        sh = client.open(spreadsheet_name)
-        ws = sh.worksheet(worksheet_name)
-        ws.delete_rows(row_number)
-        return True
-    except Exception as e:
-        st.error(f"❌ Error borrando fila {row_number} en '{worksheet_name}': {e}")
-        return False
+def add_active_checkin(equipo, realizado_por):
+    """Registra un check-in activo."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    row = [equipo, realizado_por, now]  # columnas: equipo, usuario, hora_inicio
+    append_row("checkin_activos", row)
 
-def finalize_active_checkin(spreadsheet_name: str, checkin_row_number: int, estatus: str, descripcion_override: str = "") -> bool:
+
+def finalize_active_checkin(equipo):
+    """Finaliza un check-in y calcula horas."""
+    activos = get_active_checkins()
+    if not activos:
+        return None
+
+    now = datetime.now()
+
+    for entry in activos:
+        if entry["equipo"] == equipo:
+            inicio = datetime.strptime(entry["hora_inicio"], "%Y-%m-%d %H:%M:%S")
+            horas = round((now - inicio).total_seconds() / 3600, 2)
+            fin = now.strftime("%Y-%m-%d %H:%M:%S")
+
+            return horas, entry["realizado_por"], entry["hora_inicio"], fin
+
+    return None
+
+
+# ================================================================
+#   GOOGLE DRIVE – UPLOAD ARCHIVOS
+# ================================================================
+def upload_file_to_drive(file, folder_name="Refacciones"):
     """
-    Finaliza el checkin ubicado en fila checkin_row_number (de la hoja checkin_activos).
-    Calcula tiempo y guarda en hoja 'mantenimientos'. Luego elimina la fila de checkin_activos.
-    Retorna True si todo ok.
+    Sube archivos a Drive dentro de una carpeta.
+    Si no existe la carpeta, se crea.
+    Devuelve el ID del archivo subido.
     """
     try:
-        client = _get_client()
-        sh = client.open(spreadsheet_name)
-        ws_check = sh.worksheet(CHECKIN_SHEET)
-        all_values = ws_check.get_all_values()
-        if checkin_row_number < 2 or checkin_row_number > len(all_values):
-            st.error("Fila de Check-In inválida.")
-            return False
+        service = get_drive_service()
+        if not service:
+            return None
 
-        headers_check = all_values[0]
-        row_vals = all_values[checkin_row_number - 1]  # 0-based index in list
-        row_dict = {headers_check[j]: row_vals[j] if j < len(row_vals) else "" for j in range(len(headers_check))}
+        # 1️⃣ Buscar carpeta
+        query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder'"
+        existing = service.files().list(
+            q=query,
+            spaces="drive",
+            fields="files(id, name)"
+        ).execute()
 
-        # parse hora_inicio
-        hora_inicio_str = row_dict.get("hora_inicio", "")
-        parsed = None
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
-            try:
-                parsed = datetime.strptime(hora_inicio_str, fmt)
-                break
-            except Exception:
-                continue
-        if parsed is None:
-            # fallback: now minus 0
-            parsed = datetime.now()
+        items = existing.get("files", [])
 
-        hora_fin_dt = datetime.now()
-        delta = hora_fin_dt - parsed
-        horas = round(delta.total_seconds()/3600, 2)
+        # 2️⃣ Crear carpeta si no existe
+        if not items:
+            folder_metadata = {
+                "name": folder_name,
+                "mimeType": "application/vnd.google-apps.folder"
+            }
+            folder = service.files().create(
+                body=folder_metadata,
+                fields="id"
+            ).execute()
+            folder_id = folder["id"]
+        else:
+            folder_id = items[0]["id"]
 
-        # Construir fila para 'mantenimientos' según tus encabezados exactos:
-        final_row = {
-            "Fecha": parsed.strftime("%Y-%m-%d"),
-            "Equipo": row_dict.get("Equipo", ""),
-            "Descripcion": descripcion_override if descripcion_override else row_dict.get("Descripcion", ""),
-            "Realizado_por": row_dict.get("Realizado_por", ""),
-            "estatus": estatus,
-            "tiempo_hrs": horas,
-            "hora_inicio": hora_inicio_str,
-            "hora_fin": hora_fin_dt.strftime("%Y-%m-%d %H:%M:%S")
+        # 3️⃣ Subir archivo
+        file_metadata = {
+            "name": file.name,
+            "parents": [folder_id]
         }
 
-        # append a mantenimientos
-        ok = append_sheet(spreadsheet_name, MANT_SHEET, final_row)
-        if not ok:
-            return False
+        media = MediaIoBaseUpload(
+            io.BytesIO(file.read()),
+            mimetype=file.type
+        )
 
-        # eliminar fila activa
-        deleted = delete_row_by_index(spreadsheet_name, CHECKIN_SHEET, checkin_row_number)
-        return deleted
+        uploaded = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id"
+        ).execute()
+
+        return uploaded.get("id")
+
     except Exception as e:
-        st.error(f"❌ Error finalizando check-in: {e}")
-        return False
+        st.error(f"❌ Error subiendo archivo a Drive: {e}")
+        return None
