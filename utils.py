@@ -1,143 +1,93 @@
-import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
-from datetime import datetime
+import datetime
 
-# -----------------------------------
-#   CONFIGURACIÓN GOOGLE SHEETS
-# -----------------------------------
+
+# CONFIG
+SPREADSHEET_NAME = "base_datos_app"
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
+    "https://www.googleapis.com/auth/drive",
 ]
 
-CREDS = Credentials.from_service_account_info(
-    st.secrets["gcp_service_account"], scopes=SCOPES
-)
 
-CLIENT = gspread.authorize(CREDS)
+def get_client():
+    creds = Credentials.from_service_account_file(
+        "service_account.json", scopes=SCOPES
+    )
+    client = gspread.authorize(creds)
+    return client
 
 
-# -----------------------------------
-#   LECTURA DE HOJA
-# -----------------------------------
+# =============== GENERALES ==================
 
-def read_sheet(spreadsheet_name: str, worksheet_name: str):
-    """Lee datos de una hoja exacta."""
+def read_sheet(sheet_name: str) -> pd.DataFrame:
     try:
-        sh = CLIENT.open(spreadsheet_name)
-        ws = sh.worksheet(worksheet_name)
-        data = ws.get_all_records()
-        return data
+        client = get_client()
+        sheet = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+
+        return df
     except Exception as e:
-        st.error(f"❌ Error leyendo Google Sheets: {e}")
-        return []
+        print(f"❌ Error leyendo Google Sheets: {sheet_name} → {e}")
+        return pd.DataFrame()
 
 
-# -----------------------------------
-#   ESCRITURA
-# -----------------------------------
-
-def append_sheet(spreadsheet_name: str, worksheet_name: str, row_list: list):
-    """Agrega una fila."""
+def append_sheet(sheet_name: str, row: dict):
     try:
-        sh = CLIENT.open(spreadsheet_name)
-        ws = sh.worksheet(worksheet_name)
-        ws.append_row(row_list)
+        client = get_client()
+        sheet = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
+        sheet.append_row(list(row.values()))
         return True
     except Exception as e:
-        st.error(f"❌ Error al agregar registro: {e}")
+        print(f"❌ Error al escribir en {sheet_name}: {e}")
         return False
 
 
-# -----------------------------------
-#  CHECK-IN (INICIAR)
-# -----------------------------------
+# =============== CHECK-IN / CHECK-OUT ==================
 
-def add_active_checkin(spreadsheet_name: str, equipo: str, realizado_por: str):
-    """Registra un checkin en hoja 'checkin_activos'."""
-    hora_inicio = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    return append_sheet(
-        spreadsheet_name,
-        "checkin_activos",
-        [equipo, realizado_por, hora_inicio]
-    )
+CHECKIN_SHEET = "checkin_activos"
 
 
-# -----------------------------------
-#  OBTENER CHECKIN ACTIVOS
-# -----------------------------------
-
-def get_active_checkins(spreadsheet_name: str):
-    """Regresa diccionario con checkins: equipo → fila."""
-    data = read_sheet(spreadsheet_name, "checkin_activos")
-
-    activos = {}
-    for row in data:
-        activos[row["equipo"]] = row
-    return activos
+def add_active_checkin(equipo, descripcion, realizado_por):
+    now = datetime.datetime.now()
+    row = {
+        "Fecha": now.strftime("%Y-%m-%d"),
+        "Equipo": equipo,
+        "Descripcion": descripcion,
+        "Realizado_por": realizado_por,
+        "hora_inicio": now.strftime("%H:%M:%S"),
+    }
+    append_sheet(CHECKIN_SHEET, row)
 
 
-# -----------------------------------
-#  CHECK-OUT (FINALIZAR)
-# -----------------------------------
-
-def close_checkin(spreadsheet_name: str, equipo: str,
-                  descripcion: str, estatus: str):
-    """Finaliza el checkin, calcula horas y lo pasa a 'mantenimientos'."""
-
-    activos = read_sheet(spreadsheet_name, "checkin_activos")
-    fila = None
-
-    for r in activos:
-        if r["equipo"] == equipo:
-            fila = r
-            break
-
-    if fila is None:
-        st.error("❌ No se encontró checkin activo.")
-        return False
-
-    hora_inicio = datetime.strptime(fila["hora_inicio"], "%Y-%m-%d %H:%M:%S")
-    hora_fin = datetime.now()
-    tiempo_hrs = round((hora_fin - hora_inicio).total_seconds() / 3600, 2)
-
-    fecha = datetime.now().strftime("%Y-%m-%d")
-    realizado_por = fila["realizado_por"]
-
-    # Guardar en mantenimientos
-    append_sheet(
-        spreadsheet_name,
-        "mantenimientos",
-        [
-            fecha,
-            equipo,
-            descripcion,
-            realizado_por,
-            estatus,
-            tiempo_hrs,
-            fila["hora_inicio"],
-            hora_fin.strftime("%Y-%m-%d %H:%M:%S")
-        ]
-    )
-
-    # Borrar checkin activo
-    delete_checkin_row(spreadsheet_name, equipo)
-
-    return True
+def get_active_checkins():
+    df = read_sheet(CHECKIN_SHEET)
+    return df if not df.empty else pd.DataFrame()
 
 
-def delete_checkin_row(spreadsheet_name: str, equipo: str):
-    """Elimina un checkin activo por equipo."""
-    sh = CLIENT.open(spreadsheet_name)
-    ws = sh.worksheet("checkin_activos")
-    data = ws.get_all_values()
+def finalize_active_checkin(checkin_row, estatus):
+    now = datetime.datetime.now()
+    hora_fin = now.strftime("%H:%M:%S")
 
-    for i, row in enumerate(data, start=1):
-        if row and row[0] == equipo:
-            ws.delete_rows(i)
-            return True
-    return False
+    # cálculo del tiempo total
+    t1 = datetime.datetime.strptime(checkin_row["hora_inicio"], "%H:%M:%S")
+    t2 = datetime.datetime.strptime(hora_fin, "%H:%M:%S")
+    diff = (t2 - t1).total_seconds() / 3600
+
+    row = {
+        "Fecha": checkin_row["Fecha"],
+        "Equipo": checkin_row["Equipo"],
+        "Descripcion": checkin_row["Descripcion"],
+        "Realizado_por": checkin_row["Realizado_por"],
+        "estatus": estatus,
+        "tiempo_hrs": round(diff, 2),
+        "hora_inicio": checkin_row["hora_inicio"],
+        "hora_fin": hora_fin,
+    }
+
+    # guardar en mantenimientos
+    append_sheet("mantenimientos", row)
