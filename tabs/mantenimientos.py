@@ -1,162 +1,158 @@
-# tabs/mantenimientos.py
 import streamlit as st
+import gspread
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 import pandas as pd
-import matplotlib.pyplot as plt
-from io import BytesIO
-
-from utils import (
-    read_sheet,
-    append_sheet,
-    add_active_checkin,
-    get_active_checkins,
-    finalize_active_checkin,
-)
-
-SPREADSHEET = "base_datos_app"
-MANT_SHEET = "mantenimientos"
-CHECKIN_SHEET = "checkin_activos"
+import io
+from datetime import datetime
 
 
-def _df_to_excel_bytes(df: pd.DataFrame) -> BytesIO:
-    buf = BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="mantenimientos")
-    buf.seek(0)
-    return buf
-
-def show_mantenimientos():
-    st.header("🛠 Mantenimientos — Registro, Check-In/Out y Reportes")
-
-    # --- Historial inicial (para mostrar en UI)
-    df = read_sheet(SPREADSHEET, MANT_SHEET)
-    if df is None or df.empty:
-        df = pd.DataFrame(columns=["Fecha","Equipo","Descripcion","Realizado_por","estatus","tiempo_hrs","hora_inicio","hora_fin"])
-
-    # Sidebar filtros
-    st.sidebar.header("Filtros")
-    min_date = pd.to_datetime(df["Fecha"], errors="coerce").min() if "Fecha" in df.columns else None
-    max_date = pd.to_datetime(df["Fecha"], errors="coerce").max() if "Fecha" in df.columns else None
-    date_range = st.sidebar.date_input("Rango fechas", value=(min_date.date() if min_date is not None else None, max_date.date() if max_date is not None else None))
-    equipos = df["Equipo"].dropna().unique().tolist() if "Equipo" in df.columns else []
-    tecnicos = df["Realizado_por"].dropna().unique().tolist() if "Realizado_por" in df.columns else []
-    estatus_list = df["estatus"].dropna().unique().tolist() if "estatus" in df.columns else []
-
-    sel_equipos = st.sidebar.multiselect("Equipo", options=equipos)
-    sel_tecnicos = st.sidebar.multiselect("Técnico", options=tecnicos)
-    sel_estatus = st.sidebar.multiselect("Estatus", options=estatus_list)
-
-    # --- Check-ins activos
-    st.subheader("🔵 Check-Ins activos")
-    activos = get_active_checkins(SPREADSHEET)
-    if activos:
-        df_act = pd.DataFrame(activos)
-        st.dataframe(df_act, use_container_width=True)
-    else:
-        st.info("No hay check-ins activos.")
-
-    st.markdown("---")
-
-    # --- Iniciar Check-In
-    st.subheader("🔔 Iniciar Check-In")
-    with st.form("form_checkin"):
-        ci_equipo = st.text_input("Equipo", key="ci_equipo")
-        ci_descripcion = st.text_area("Descripción", key="ci_descripcion")
-        ci_tecnico = st.text_input("Realizado por", key="ci_tecnico")
-        submitted_ci = st.form_submit_button("Iniciar Check-In")
-    if submitted_ci:
-        if not ci_equipo or not ci_tecnico:
-            st.error("Equipo y Técnico son obligatorios.")
-        else:
-            ok = add_active_checkin(SPREADSHEET, ci_equipo, ci_descripcion, ci_tecnico)
-            if ok:
-                st.success("Check-In registrado.")
-                st.rerun()
-            else:
-                st.error("No se pudo registrar Check-In.")
-
-    st.markdown("---")
-
-    # --- Finalizar Check-Out
-    st.subheader("🔴 Finalizar Check-Out")
-    activos = get_active_checkins(SPREADSHEET)
-    if activos:
-        # show select with human-friendly string
-        choices = [f"{a['_row']} | {a.get('Equipo','')} | {a.get('Realizado_por','')} | {a.get('hora_inicio','')}" for a in activos]
-        sel = st.selectbox("Seleccione check-in a finalizar", options=["--"] + choices, key="sel_checkout")
-        if sel and sel != "--":
-            row_num = int(sel.split("|")[0].strip())
-            est_final = st.selectbox("Estatus final", ["Completado","Pendiente","Cancelado"], key="status_checkout")
-            desc_override = st.text_area("Descripción final (opcional)", height=80)
-            if st.button("Finalizar Check-Out", key="btn_finalize"):
-                ok = finalize_active_checkin(SPREADSHEET, row_num, est_final, desc_override)
-                if ok:
-                    st.success("Check-Out finalizado y guardado en historial.")
-                    st.rerun()
-                else:
-                    st.error("No se pudo finalizar el Check-Out.")
-    else:
-        st.info("No hay check-ins activos.")
-
-    st.markdown("---")
-
-    # --- Historial filtrado y gráficos
-    st.subheader("📚 Historial (filtrado)")
-
-    df = read_sheet(SPREADSHEET, MANT_SHEET)
-    if df is None or df.empty:
-        st.info("No hay registros en historial.")
-        return
-
-    # Apply filters
-    df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce")
-    if isinstance(date_range, tuple) and len(date_range) == 2 and all(date_range):
-        start, end = date_range
-        df = df[(df["Fecha"].dt.date >= start) & (df["Fecha"].dt.date <= end)]
-    if sel_equipos:
-        df = df[df["Equipo"].isin(sel_equipos)]
-    if sel_tecnicos:
-        df = df[df["Realizado_por"].isin(sel_tecnicos)]
-    if sel_estatus:
-        df = df[df["estatus"].isin(sel_estatus)]
-
-    st.dataframe(df, use_container_width=True)
-
-    st.markdown("---")
-    st.subheader("📊 Gráficas")
-
-    # horas por equipo
-    if "Equipo" in df.columns and "tiempo_hrs" in df.columns:
-        grp = df.groupby("Equipo")["tiempo_hrs"].sum().sort_values(ascending=False)
-        fig, ax = plt.subplots()
-        grp.plot(kind="bar", ax=ax)
-        ax.set_ylabel("Horas")
-        ax.set_title("Horas por equipo")
-        st.pyplot(fig)
-
-    # horas por técnico
-    if "Realizado_por" in df.columns and "tiempo_hrs" in df.columns:
-        grp2 = df.groupby("Realizado_por")["tiempo_hrs"].sum().sort_values(ascending=False)
-        fig2, ax2 = plt.subplots()
-        grp2.plot(kind="bar", ax=ax2)
-        ax2.set_ylabel("Horas")
-        ax2.set_title("Horas por técnico")
-        st.pyplot(fig2)
-
-    # estatus counts
-    if "estatus" in df.columns:
-        est_counts = df["estatus"].value_counts()
-        fig3, ax3 = plt.subplots()
-        est_counts.plot(kind="bar", ax=ax3)
-        ax3.set_ylabel("Cantidad")
-        ax3.set_title("Mantenimientos por estatus")
-        st.pyplot(fig3)
-
-    # Export buttons
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
-    st.download_button("📥 Descargar CSV (filtrado)", csv_bytes, "mantenimientos_filtrado.csv", "text/csv")
-
+# ==========================
+#  AUTENTICACIÓN GOOGLE
+# ==========================
+def get_gs_client():
     try:
-        xlsx = _df_to_excel_bytes(df)
-        st.download_button("📥 Descargar XLSX (filtrado)", xlsx, "mantenimientos_filtrado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        creds_dict = st.secrets["gcp_service_account"]
+
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        client = gspread.authorize(creds)
+        return client
     except Exception as e:
-        st.warning(f"No se pudo generar XLSX: {e}")
+        st.error(f"❌ Error autenticando Google: {e}")
+        return None
+
+
+def get_drive_service():
+    try:
+        creds_dict = st.secrets["gcp_service_account"]
+
+        scopes = ["https://www.googleapis.com/auth/drive"]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+
+        service = build("drive", "v3", credentials=creds)
+        return service
+    except Exception as e:
+        st.error(f"❌ Error creando servicio de Drive: {e}")
+        return None
+
+
+# ==========================
+#   GOOGLE SHEETS
+# ==========================
+SHEET_URL = st.secrets["sheets"]["sheet_url"]
+
+
+def read_sheet(worksheet_name):
+    try:
+        client = get_gs_client()
+        sh = client.open_by_url(SHEET_URL)
+        ws = sh.worksheet(worksheet_name)
+        data = ws.get_all_records()
+        return data
+    except Exception as e:
+        st.error(f"❌ Error leyendo Google Sheets ({worksheet_name}): {e}")
+        return None
+
+
+def append_row(worksheet_name, row):
+    try:
+        client = get_gs_client()
+        sh = client.open_by_url(SHEET_URL)
+        ws = sh.worksheet(worksheet_name)
+        ws.append_row(row)
+        return True
+    except Exception as e:
+        st.error(f"❌ Error guardando en Google Sheets ({worksheet_name}): {e}")
+        return False
+
+
+# ==========================
+#   CHECK-IN / CHECK-OUT
+# ==========================
+def get_active_checkins():
+    data = read_sheet("checkin_activos")
+    if not data:
+        return []
+    return data
+
+
+def add_active_checkin(equipo, realizado_por):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    row = [equipo, realizado_por, now]
+    append_row("checkin_activos", row)
+
+
+def finalize_active_checkin(equipo):
+    activos = read_sheet("checkin_activos")
+    if not activos:
+        return None
+
+    now = datetime.now()
+
+    for entry in activos:
+        if entry["equipo"] == equipo:
+            inicio = datetime.strptime(entry["hora_inicio"], "%Y-%m-%d %H:%M:%S")
+            horas = round((now - inicio).total_seconds() / 3600, 2)
+            fin = now.strftime("%Y-%m-%d %H:%M:%S")
+            return horas, entry["realizado_por"], entry["hora_inicio"], fin
+
+    return None
+
+
+# ==========================
+#   GOOGLE DRIVE UPLOAD
+# ==========================
+def upload_file_to_drive(file, folder_name="Refacciones"):
+    """
+    Sube un archivo a Google Drive dentro de una carpeta.
+    Si la carpeta no existe, la crea.
+    Devuelve el ID del archivo subido.
+    """
+    try:
+        service = get_drive_service()
+
+        # 1️⃣ Buscar carpeta existente
+        query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder'"
+        results = (
+            service.files()
+            .list(q=query, spaces="drive", fields="files(id, name)")
+            .execute()
+        )
+        items = results.get("files", [])
+
+        # 2️⃣ Crear carpeta si no existe
+        if not items:
+            file_metadata = {
+                "name": folder_name,
+                "mimeType": "application/vnd.google-apps.folder",
+            }
+            folder = service.files().create(body=file_metadata, fields="id").execute()
+            folder_id = folder.get("id")
+        else:
+            folder_id = items[0]["id"]
+
+        # 3️⃣ Subir archivo
+        file_metadata = {
+            "name": file.name,
+            "parents": [folder_id]
+        }
+
+        media = MediaIoBaseUpload(io.BytesIO(file.read()), mimetype=file.type)
+
+        uploaded = (
+            service.files()
+            .create(body=file_metadata, media_body=media, fields="id")
+            .execute()
+        )
+
+        return uploaded.get("id")
+
+    except Exception as e:
+        st.error(f"❌ Error subiendo archivo a Drive: {e}")
+        return None
