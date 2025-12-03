@@ -1,104 +1,109 @@
-import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
+import pandas as pd
+
+# ---------------------------------------------------------
+# CONFIGURACIÓN DE GOOGLE SHEETS
+# ---------------------------------------------------------
+
+# Alcances necesarios para lectura/escritura
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+# Archivo de credenciales del service account
+SERVICE_ACCOUNT_FILE = "service_account.json"
+
+# Nombre del archivo de Google Sheet
+SPREADSHEET_NAME = "base_datos_app"
 
 
-# -----------------------------------
-# Conexión a Google Sheets
-# -----------------------------------
 def _get_client():
-    creds_info = st.secrets["gcp_service_account"]
-
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-
-    credentials = Credentials.from_service_account_info(creds_info, scopes=scopes)
-    client = gspread.authorize(credentials)
+    """Autentica y devuelve el cliente de gspread."""
+    creds = Credentials.from_service_account_file(
+        SERVICE_ACCOUNT_FILE,
+        scopes=SCOPES
+    )
+    client = gspread.authorize(creds)
     return client
 
 
-# -----------------------------------
-# Leer hoja completa
-# -----------------------------------
-def read_sheet(spreadsheet_name, worksheet_name):
-    client = _get_client()
-    sh = client.open(spreadsheet_name)
-    ws = sh.worksheet(worksheet_name)
-    return ws.get_all_records()
-
-
-# -----------------------------------
-# Escribir una fila nueva
-# -----------------------------------
-def append_sheet(spreadsheet_name, worksheet_name, row_dict):
-    client = _get_client()
-    sh = client.open(spreadsheet_name)
-    ws = sh.worksheet(worksheet_name)
-
-    headers = ws.row_values(1)
-
-    row = [row_dict.get(h, "") for h in headers]
-    ws.append_row(row)
-
-# ---------------------------------------------------------
-# SUBIR ARCHIVOS A GOOGLE DRIVE Y REGRESAR URL PÚBLICA
-# ---------------------------------------------------------
-
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-from google.oauth2.service_account import Credentials
-import io
-import streamlit as st
-
-def upload_file_to_drive(file, filename, folder_id=None):
+def read_sheet(worksheet_name):
     """
-    Sube un archivo (PDF, imagen, etc.) a Google Drive y regresa un enlace público.
-    No se usa en la pestaña Mantenimientos, pero se deja funcional para otras pestañas.
+    Lee una hoja del Google Sheet y devuelve una lista de dicts.
+    Retorna [] si la hoja está vacía o no existe.
     """
-
     try:
-        # 1️⃣ Credenciales desde secrets
-        creds_info = st.secrets["gcp_service_account"]
-        credentials = Credentials.from_service_account_info(
-            creds_info,
-            scopes=["https://www.googleapis.com/auth/drive"]
-        )
+        client = _get_client()
+        sheet = client.open(SPREADSHEET_NAME).worksheet(worksheet_name)
+        data = sheet.get_all_records()
+        return data if data else []
+    except Exception as e:
+        print("Error leyendo hoja:", worksheet_name, e)
+        return []
 
-        # 2️⃣ Servicio Drive
-        drive_service = build("drive", "v3", credentials=credentials)
 
-        # 3️⃣ Preparar archivo
-        file_content = io.BytesIO(file.read())
-        media = MediaIoBaseUpload(file_content, mimetype=file.type)
+def append_sheet(worksheet_name, row_dict):
+    """
+    Inserta una nueva fila en la hoja indicada.
+    row_dict debe ser un diccionario con los nombres EXACTOS de las columnas.
+    """
+    try:
+        client = _get_client()
+        sheet = client.open(SPREADSHEET_NAME).worksheet(worksheet_name)
 
-        metadata = {
-            "name": filename,
-            "mimeType": file.type,
-        }
+        # Obtener encabezados
+        headers = sheet.row_values(1)
 
-        if folder_id:
-            metadata["parents"] = [folder_id]
+        # Crear una fila alineada
+        row = [row_dict.get(col, "") for col in headers]
 
-        # 4️⃣ Subir archivo
-        uploaded = drive_service.files().create(
-            body=metadata,
-            media_body=media,
-            fields="id"
-        ).execute()
-
-        file_id = uploaded.get("id")
-
-        # 5️⃣ Hacerlo público
-        drive_service.permissions().create(
-            fileId=file_id,
-            body={"role": "reader", "type": "anyone"},
-        ).execute()
-
-        # 6️⃣ Regresar URL pública
-        return f"https://drive.google.com/file/d/{file_id}/view?usp=sharing"
+        sheet.append_row(row)
+        return True
 
     except Exception as e:
-        st.error(f"❌ Error al subir archivo a Drive: {e}")
+        print("Error agregando fila a hoja:", worksheet_name, e)
+        return False
+
+
+def update_sheet_row(worksheet_name, row_number, row_dict):
+    """
+    Actualiza una fila existente según row_number (1-based).
+    row_dict debe coincidir con los encabezados de la hoja.
+    """
+    try:
+        client = _get_client()
+        sheet = client.open(SPREADSHEET_NAME).worksheet(worksheet_name)
+
+        headers = sheet.row_values(1)
+        row = [row_dict.get(col, "") for col in headers]
+
+        sheet.update(f"A{row_number}", [row])
+        return True
+
+    except Exception as e:
+        print("Error actualizando fila:", worksheet_name, e)
+        return False
+
+
+def find_row_by_value(worksheet_name, column_name, value):
+    """
+    Busca un valor en una columna y devuelve el número de fila (1-based).
+    Si no existe, devuelve None.
+    """
+    try:
+        client = _get_client()
+        sheet = client.open(SPREADSHEET_NAME).worksheet(worksheet_name)
+
+        headers = sheet.row_values(1)
+        if column_name not in headers:
+            return None
+
+        col_index = headers.index(column_name) + 1
+        column_data = sheet.col_values(col_index)
+
+        for i, cell in enumerate(column_data, start=1):
+            if str(cell).strip() == str(value).strip():
+                return i
+
+        return None
+    except:
         return None
