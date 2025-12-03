@@ -48,7 +48,7 @@ def _form_registro():
         st.success("✅ Mantenimiento guardado correctamente.")
 
         # Limpieza visual de campos
-        st.experimental_rerun()
+        st.rerun()
 
 
 # -----------------------------
