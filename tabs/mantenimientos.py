@@ -8,8 +8,6 @@ from io import BytesIO
 from datetime import datetime
 from utils import read_sheet, append_sheet
 
-st.set_option('deprecation.showPyplotGlobalUse', False)
-
 SHEET = "mantenimientos"
 
 def _load_data():
