@@ -58,33 +58,52 @@ def append_row(worksheet_name, row):
         return False
 
 
-# ======================================================
-#                CHECK-IN / CHECK-OUT
-# ======================================================
+# ==========================
+#   CHECK-IN / CHECK-OUT
+# ==========================
 
-def get_active_checkins():
-    return read_sheet("checkin_activos")
+# Buscar check-in activo de un equipo
+if activos:
+    activo = next((a for a in activos if a["Equipo"] == equipo_sel), None)
+else:
+    activo = None
 
+# Mostrar estado
+if activo:
+    st.warning(f"🔴 Este equipo ya tiene un CHECK-IN activo desde: {activo['hora_inicio']}")
+else:
+    st.success("🟢 No hay check-in activo para este equipo.")
 
-def add_active_checkin(equipo, realizado_por):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    row = [equipo, realizado_por, now]
-    append_row("checkin_activos", row)
+# BOTÓN CHECK-IN
+if not activo:
+    if st.button("Iniciar Check-in"):
+        add_active_checkin(
+            equipo_sel,
+            descripcion,
+            realizado_por
+        )
+        st.toast("Check-in iniciado")
+        st.rerun()
 
+# BOTÓN CHECK-OUT
+if activo:
+    if st.button("Finalizar Check-out"):
+        # OBTENER NÚMERO DE FILA
+        idx = activos.index(activo)
+        fila = idx + 2  # +2 = cuenta encabezado + index base 0
 
-def finalize_active_checkin(equipo):
-    activos = read_sheet("checkin_activos")
-    now = datetime.now()
+        ok = finalize_active_checkin_by_rownum(
+            fila,
+            estatus_sel,
+            descripcion
+        )
 
-    for entry in activos:
-        if entry["equipo"] == equipo:
-            inicio = datetime.strptime(entry["hora_inicio"], "%Y-%m-%d %H:%M:%S")
-            horas = round((now - inicio).total_seconds() / 3600, 2)
-            hora_fin = now.strftime("%Y-%m-%d %H:%M:%S")
-            return horas, entry["realizado_por"], entry["hora_inicio"], hora_fin
+        if ok:
+            st.success("✔ Check-out completado y guardado en 'mantenimientos'")
+        else:
+            st.error("Error finalizando check-out")
 
-    return None
-
+        st.rerun()
 
 # ======================================================
 #                INTERFAZ PRINCIPAL
