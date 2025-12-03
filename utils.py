@@ -1,86 +1,143 @@
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
+import pandas as pd
 from datetime import datetime
 
-# --------------------------------------------------------------------
-# 🔐 CONFIGURACIÓN DE GOOGLE SHEETS
-# --------------------------------------------------------------------
+# -----------------------------------
+#   CONFIGURACIÓN GOOGLE SHEETS
+# -----------------------------------
 
-SCOPE = [
+SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
 
-def _get_client():
-    """Crea cliente autorizado para Google Sheets usando st.secrets."""
-    credentials = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
-        scopes=SCOPE
-    )
-    return gspread.authorize(credentials)
+CREDS = Credentials.from_service_account_info(
+    st.secrets["gcp_service_account"], scopes=SCOPES
+)
 
-# --------------------------------------------------------------------
-# 📄 LECTURA Y ESCRITURA EN GOOGLE SHEETS
-# --------------------------------------------------------------------
+CLIENT = gspread.authorize(CREDS)
+
+
+# -----------------------------------
+#   LECTURA DE HOJA
+# -----------------------------------
 
 def read_sheet(spreadsheet_name: str, worksheet_name: str):
-    """Lee una hoja y regresa una lista de dicts."""
+    """Lee datos de una hoja exacta."""
     try:
-        gc = _get_client()
-        sh = gc.open(spreadsheet_name)
+        sh = CLIENT.open(spreadsheet_name)
         ws = sh.worksheet(worksheet_name)
-        return ws.get_all_records()
+        data = ws.get_all_records()
+        return data
     except Exception as e:
-        st.error(f"❌ Error leyendo Google Sheet: {e}")
-        return None
+        st.error(f"❌ Error leyendo Google Sheets: {e}")
+        return []
 
 
-def append_sheet(spreadsheet_name: str, worksheet_name: str, row: list):
-    """Añade una fila al final de una hoja."""
+# -----------------------------------
+#   ESCRITURA
+# -----------------------------------
+
+def append_sheet(spreadsheet_name: str, worksheet_name: str, row_list: list):
+    """Agrega una fila."""
     try:
-        gc = _get_client()
-        sh = gc.open(spreadsheet_name)
+        sh = CLIENT.open(spreadsheet_name)
         ws = sh.worksheet(worksheet_name)
-        ws.append_row(row)
+        ws.append_row(row_list)
         return True
     except Exception as e:
-        st.error(f"❌ Error escribiendo en Google Sheet: {e}")
+        st.error(f"❌ Error al agregar registro: {e}")
         return False
 
-# --------------------------------------------------------------------
-# ⏱ CHECK IN / CHECK OUT
-# --------------------------------------------------------------------
 
-CHECKIN_SHEET = "chekin_activos"   # Nombre exacto que tú usas
+# -----------------------------------
+#  CHECK-IN (INICIAR)
+# -----------------------------------
 
-def add_active_checkin(spreadsheet_name, equipo, realizado_por):
-    """Registra un nuevo check-in."""
-    now = datetime.now().isoformat()
-    row = [equipo, realizado_por, now]
-    return append_sheet(spreadsheet_name, CHECKIN_SHEET, row)
+def add_active_checkin(spreadsheet_name: str, equipo: str, realizado_por: str):
+    """Registra un checkin en hoja 'checkin_activos'."""
+    hora_inicio = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-
-def get_active_checkins(spreadsheet_name):
-    """Obtiene todos los check-ins activos."""
-    data = read_sheet(spreadsheet_name, CHECKIN_SHEET)
-    return data if data else []
+    return append_sheet(
+        spreadsheet_name,
+        "checkin_activos",
+        [equipo, realizado_por, hora_inicio]
+    )
 
 
-def close_checkin(spreadsheet_name, equipo):
-    """Cierra el check-in de un equipo existente."""
-    try:
-        gc = _get_client()
-        sh = gc.open(spreadsheet_name)
-        ws = sh.worksheet(CHECKIN_SHEET)
-        data = ws.get_all_records()
+# -----------------------------------
+#  OBTENER CHECKIN ACTIVOS
+# -----------------------------------
 
-        for i, row in enumerate(data, start=2):  # fila real (1=header)
-            if row["equipo"] == equipo:
-                ws.update_cell(i, 4, datetime.now().isoformat())
-                return True
+def get_active_checkins(spreadsheet_name: str):
+    """Regresa diccionario con checkins: equipo → fila."""
+    data = read_sheet(spreadsheet_name, "checkin_activos")
 
+    activos = {}
+    for row in data:
+        activos[row["equipo"]] = row
+    return activos
+
+
+# -----------------------------------
+#  CHECK-OUT (FINALIZAR)
+# -----------------------------------
+
+def close_checkin(spreadsheet_name: str, equipo: str,
+                  descripcion: str, estatus: str):
+    """Finaliza el checkin, calcula horas y lo pasa a 'mantenimientos'."""
+
+    activos = read_sheet(spreadsheet_name, "checkin_activos")
+    fila = None
+
+    for r in activos:
+        if r["equipo"] == equipo:
+            fila = r
+            break
+
+    if fila is None:
+        st.error("❌ No se encontró checkin activo.")
         return False
-    except Exception as e:
-        st.error(f"❌ Error cerrando check-in: {e}")
-        return False
+
+    hora_inicio = datetime.strptime(fila["hora_inicio"], "%Y-%m-%d %H:%M:%S")
+    hora_fin = datetime.now()
+    tiempo_hrs = round((hora_fin - hora_inicio).total_seconds() / 3600, 2)
+
+    fecha = datetime.now().strftime("%Y-%m-%d")
+    realizado_por = fila["realizado_por"]
+
+    # Guardar en mantenimientos
+    append_sheet(
+        spreadsheet_name,
+        "mantenimientos",
+        [
+            fecha,
+            equipo,
+            descripcion,
+            realizado_por,
+            estatus,
+            tiempo_hrs,
+            fila["hora_inicio"],
+            hora_fin.strftime("%Y-%m-%d %H:%M:%S")
+        ]
+    )
+
+    # Borrar checkin activo
+    delete_checkin_row(spreadsheet_name, equipo)
+
+    return True
+
+
+def delete_checkin_row(spreadsheet_name: str, equipo: str):
+    """Elimina un checkin activo por equipo."""
+    sh = CLIENT.open(spreadsheet_name)
+    ws = sh.worksheet("checkin_activos")
+    data = ws.get_all_values()
+
+    for i, row in enumerate(data, start=1):
+        if row and row[0] == equipo:
+            ws.delete_rows(i)
+            return True
+    return False
