@@ -1,9 +1,8 @@
 streamlit
 gspread
-google-auth
-pandas
-matplotlib
-openpyxl
 google-api-python-client
 google-auth
 google-auth-oauthlib
+pandas
+openpyxl
+matplotlib
