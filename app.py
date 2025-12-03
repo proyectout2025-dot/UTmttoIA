@@ -33,7 +33,7 @@ with tabs[0]:
 with tabs[1]:
     show_refacciones()
 
-# Pestaña: Config
+# Pestaña: Configuración
 with tabs[2]:
     show_config()
 
