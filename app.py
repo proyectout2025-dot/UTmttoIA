@@ -1,19 +1,42 @@
 # app.py
 import streamlit as st
+
+# Importar pestañas
 from tabs.mantenimientos import show_mantenimientos
+from tabs.refacciones import show_refacciones
+from tabs.config import show_config
 
-st.set_page_config(page_title="Sistema de Mantenimiento", layout="wide")
-st.title("📘 Sistema de Mantenimiento")
+# Importar módulo temporal de setup
+import setup_sheets
 
-tabs = st.tabs(["🛠 Mantenimientos", "🔧 Refacciones", "⚙️ Config"])
 
+st.set_page_config(
+    page_title="Sistema de Mantenimientos",
+    layout="wide",
+)
+
+st.title("🔧 Sistema de Mantenimiento UT — IA")
+
+# Crear pestañas
+tabs = st.tabs([
+    "🛠 Mantenimientos",
+    "🔩 Refacciones",
+    "⚙️ Configuración",
+    "🧩 Setup Inicial"
+])
+
+# Pestaña: Mantenimientos
 with tabs[0]:
     show_mantenimientos()
 
+# Pestaña: Refacciones
 with tabs[1]:
-    st.header("🔧 Refacciones")
-    st.info("Pestaña Refacciones - por implementar (puedo generarla si la deseas).")
+    show_refacciones()
 
+# Pestaña: Config
 with tabs[2]:
-    st.header("⚙️ Config")
-    st.info("Pestaña Config - por implementar (subida de manuales, etc.).")
+    show_config()
+
+# Pestaña: Setup Inicial
+with tabs[3]:
+    setup_sheets.run_setup()
