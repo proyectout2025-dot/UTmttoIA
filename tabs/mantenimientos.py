@@ -16,7 +16,6 @@ SPREADSHEET = "base_datos_app"
 MANT_SHEET = "mantenimientos"
 CHECKIN_SHEET = "checkin_activos"
 
-st.set_option("deprecation.showPyplotGlobalUse", False)
 
 def _df_to_excel_bytes(df: pd.DataFrame) -> BytesIO:
     buf = BytesIO()
