@@ -1,10 +1,12 @@
 streamlit
+pandas
+numpy
+matplotlib
 gspread
 oauth2client
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
-pandas
-openai
-pypdf2
 google-api-python-client
+openpyxl
+xlsxwriter
