@@ -1,103 +1,173 @@
+# utils.py
+import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
+from datetime import datetime, timezone
 import pandas as pd
-import datetime
 
-
-SPREADSHEET_NAME = "base_datos_app"
-
+# -------------------------
+# Configuración
+# -------------------------
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
 
-
-def get_client():
-    creds = Credentials.from_service_account_file(
-        "service_account.json", scopes=SCOPES
-    )
+def _get_client():
+    creds_info = st.secrets["gcp_service_account"]
+    creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
     return gspread.authorize(creds)
 
-
-# =====================================================
-# LECTURA / ESCRITURA SEGURA
-# =====================================================
-
-def read_sheet(sheet_name):
+# -------------------------
+# Leer hoja -> DataFrame
+# -------------------------
+def read_sheet(spreadsheet_name: str, worksheet_name: str) -> pd.DataFrame:
+    """Lee worksheet y retorna DataFrame (vacío si hay problema)."""
     try:
-        client = get_client()
-        sheet = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
-        data = sheet.get_all_records()
-        return pd.DataFrame(data)
+        client = _get_client()
+        sh = client.open(spreadsheet_name)
+        ws = sh.worksheet(worksheet_name)
+        rows = ws.get_all_records()
+        return pd.DataFrame(rows)
     except Exception as e:
-        print(f"❌ Error leyendo hoja {sheet_name}: {e}")
+        st.error(f"❌ Error leyendo Google Sheets '{worksheet_name}': {e}")
         return pd.DataFrame()
 
-
-def append_sheet(sheet_name, row_dict):
+# -------------------------
+# Append con orden de encabezados
+# -------------------------
+def append_sheet(spreadsheet_name: str, worksheet_name: str, row_dict: dict) -> bool:
+    """
+    Añade una fila. row_dict keys deben coincidir con los encabezados de la hoja.
+    Se respeta el orden de encabezados en la hoja.
+    """
     try:
-        client = get_client()
-        sheet = client.open(SPREADSHEET_NAME).worksheet(sheet_name)
+        client = _get_client()
+        sh = client.open(spreadsheet_name)
+        ws = sh.worksheet(worksheet_name)
 
-        # Obtener encabezados reales
-        headers = sheet.row_values(1)
-
-        # Acomodar los valores EXACTAMENTE en el orden correcto
+        headers = ws.row_values(1)
         row = [row_dict.get(h, "") for h in headers]
-
-        sheet.append_row(row)
+        ws.append_row(row, value_input_option="USER_ENTERED")
         return True
-
     except Exception as e:
-        print(f"❌ Error guardando en hoja {sheet_name}: {e}")
+        st.error(f"❌ Error guardando en '{worksheet_name}': {e}")
         return False
 
-
-# =====================================================
-# CHECK-IN / CHECK-OUT
-# =====================================================
-
+# -------------------------
+# Helpers para checkin_activos
+# -------------------------
 CHECKIN_SHEET = "checkin_activos"
+MANT_SHEET = "mantenimientos"
 
+def get_active_checkins(spreadsheet_name: str):
+    """
+    Devuelve lista de dicts de checkins activos con campo adicional '_row' = número de fila real.
+    """
+    try:
+        client = _get_client()
+        sh = client.open(spreadsheet_name)
+        ws = sh.worksheet(CHECKIN_SHEET)
+        all_values = ws.get_all_values()
+        if len(all_values) < 2:
+            return []
+        headers = all_values[0]
+        records = []
+        for i, row in enumerate(all_values[1:], start=2):
+            # map row into dict
+            row_dict = {headers[j]: row[j] if j < len(row) else "" for j in range(len(headers))}
+            row_dict["_row"] = i
+            records.append(row_dict)
+        return records
+    except Exception as e:
+        # si la hoja no existe o está vacía devolvemos lista vacía
+        st.info(f"(get_active_checkins) {e}")
+        return []
 
-def add_active_checkin(equipo, descripcion, realizado_por):
-    now = datetime.datetime.now()
-
+def add_active_checkin(spreadsheet_name: str, equipo: str, descripcion: str, realizado_por: str) -> bool:
+    """
+    Añade un check-in a la hoja CHECKIN_SHEET.
+    Encabezados esperados en checkin_activos: Fecha, Equipo, Descripcion, Realizado_por, hora_inicio
+    """
+    now = datetime.now(timezone.utc).astimezone().replace(tzinfo=None)  # naive local
+    hora_inicio = now.strftime("%Y-%m-%d %H:%M:%S")
     row = {
         "Fecha": now.strftime("%Y-%m-%d"),
         "Equipo": equipo,
         "Descripcion": descripcion,
         "Realizado_por": realizado_por,
-        "hora_inicio": now.strftime("%H:%M:%S"),
+        "hora_inicio": hora_inicio
     }
+    return append_sheet(spreadsheet_name, CHECKIN_SHEET, row)
 
-    append_sheet(CHECKIN_SHEET, row)
+def delete_row_by_index(spreadsheet_name: str, worksheet_name: str, row_number: int) -> bool:
+    """Elimina una fila por número (1-based)."""
+    try:
+        client = _get_client()
+        sh = client.open(spreadsheet_name)
+        ws = sh.worksheet(worksheet_name)
+        ws.delete_rows(row_number)
+        return True
+    except Exception as e:
+        st.error(f"❌ Error borrando fila {row_number} en '{worksheet_name}': {e}")
+        return False
 
+def finalize_active_checkin(spreadsheet_name: str, checkin_row_number: int, estatus: str, descripcion_override: str = "") -> bool:
+    """
+    Finaliza el checkin ubicado en fila checkin_row_number (de la hoja checkin_activos).
+    Calcula tiempo y guarda en hoja 'mantenimientos'. Luego elimina la fila de checkin_activos.
+    Retorna True si todo ok.
+    """
+    try:
+        client = _get_client()
+        sh = client.open(spreadsheet_name)
+        ws_check = sh.worksheet(CHECKIN_SHEET)
+        all_values = ws_check.get_all_values()
+        if checkin_row_number < 2 or checkin_row_number > len(all_values):
+            st.error("Fila de Check-In inválida.")
+            return False
 
-def get_active_checkins():
-    df = read_sheet(CHECKIN_SHEET)
-    return df if not df.empty else pd.DataFrame()
+        headers_check = all_values[0]
+        row_vals = all_values[checkin_row_number - 1]  # 0-based index in list
+        row_dict = {headers_check[j]: row_vals[j] if j < len(row_vals) else "" for j in range(len(headers_check))}
 
+        # parse hora_inicio
+        hora_inicio_str = row_dict.get("hora_inicio", "")
+        parsed = None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                parsed = datetime.strptime(hora_inicio_str, fmt)
+                break
+            except Exception:
+                continue
+        if parsed is None:
+            # fallback: now minus 0
+            parsed = datetime.now()
 
-def finalize_active_checkin(row, estatus):
-    now = datetime.datetime.now()
-    hora_fin = now.strftime("%H:%M:%S")
+        hora_fin_dt = datetime.now()
+        delta = hora_fin_dt - parsed
+        horas = round(delta.total_seconds()/3600, 2)
 
-    # calcular tiempo
-    t1 = datetime.datetime.strptime(row["hora_inicio"], "%H:%M:%S")
-    t2 = datetime.datetime.strptime(hora_fin, "%H:%M:%S")
+        # Construir fila para 'mantenimientos' según tus encabezados exactos:
+        final_row = {
+            "Fecha": parsed.strftime("%Y-%m-%d"),
+            "Equipo": row_dict.get("Equipo", ""),
+            "Descripcion": descripcion_override if descripcion_override else row_dict.get("Descripcion", ""),
+            "Realizado_por": row_dict.get("Realizado_por", ""),
+            "estatus": estatus,
+            "tiempo_hrs": horas,
+            "hora_inicio": hora_inicio_str,
+            "hora_fin": hora_fin_dt.strftime("%Y-%m-%d %H:%M:%S")
+        }
 
-    diff = (t2 - t1).total_seconds() / 3600
+        # append a mantenimientos
+        ok = append_sheet(spreadsheet_name, MANT_SHEET, final_row)
+        if not ok:
+            return False
 
-    new_row = {
-        "Fecha": row["Fecha"],
-        "Equipo": row["Equipo"],
-        "Descripcion": row["Descripcion"],
-        "Realizado_por": row["Realizado_por"],
-        "estatus": estatus,
-        "tiempo_hrs": round(diff, 2),
-        "hora_inicio": row["hora_inicio"],
-        "hora_fin": hora_fin
-    }
-
-    append_sheet("mantenimientos", new_row)
+        # eliminar fila activa
+        deleted = delete_row_by_index(spreadsheet_name, CHECKIN_SHEET, checkin_row_number)
+        return deleted
+    except Exception as e:
+        st.error(f"❌ Error finalizando check-in: {e}")
+        return False
