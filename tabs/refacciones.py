@@ -1,41 +1,37 @@
 import streamlit as st
+from utils import read_sheet, append_row, ensure_headers
 import pandas as pd
-from datetime import datetime
-from utils import read_sheet, append_row
 
 SHEET = "refacciones"
 
+EXPECTED_HEADERS = ["Fecha", "Refaccion", "Cantidad", "Descripcion"]
+
 def show_refacciones():
-    st.header("🔩 Refacciones — Inventario")
 
-    data = read_sheet(SHEET)
-    df = pd.DataFrame(data) if data else pd.DataFrame()
+    ensure_headers(SHEET, EXPECTED_HEADERS)
 
-    st.subheader("📋 Inventario actual")
-    if df.empty:
-        st.info("No hay refacciones registradas.")
-    else:
-        st.dataframe(df, width="stretch")
+    st.header("🔩 Refacciones")
 
-    st.subheader("➕ Agregar refacción")
+    df = pd.DataFrame(read_sheet(SHEET))
 
-    with st.form("frm_ref", clear_on_submit=True):
-        num_parte = st.text_input("Número de parte")
-        parte_cliente = st.text_input("Parte del cliente")
-        ubicacion = st.text_input("Ubicación")
-        existencias = st.number_input("Existencias", min_value=0, step=1)
-        guardar = st.form_submit_button("Guardar refacción")
+    st.subheader("Agregar Refacción")
 
-    if guardar:
+    nombre = st.text_input("Refacción")
+    cantidad = st.number_input("Cantidad", min_value=1)
+    desc = st.text_area("Descripción")
+
+    if st.button("Guardar"):
         row = [
             datetime.now().strftime("%Y-%m-%d"),
-            num_parte,
-            parte_cliente,
-            "",
-            ubicacion,
-            existencias,
-            ""
+            nombre,
+            cantidad,
+            desc
         ]
-        if append_row(SHEET, row):
-            st.success("Refacción guardada.")
-            st.rerun()
+        append_row(SHEET, row)
+        st.success("Guardada.")
+        st.rerun()
+
+    st.subheader("Inventario")
+    df = pd.DataFrame(read_sheet(SHEET))
+    if not df.empty:
+        st.dataframe(df, width="stretch")
