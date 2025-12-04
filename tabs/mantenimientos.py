@@ -1,111 +1,92 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime
+
 from utils import (
-    read_sheet, append_row,
-    get_active_checkins, start_checkin, finalize_checkin,
-    ensure_headers
+    read_sheet,
+    append_row,
+    get_active_checkins,
+    add_active_checkin,
+    finalize_checkin
 )
 
-SHEET = "mantenimientos"
-
-EXPECTED_HEADERS = [
-    "Fecha", "Equipo", "Descripcion", "Realizado_por",
-    "estatus", "tiempo_hrs", "hora_inicio", "hora_fin"
-]
 
 def show_mantenimientos():
-
-    # ============================
-    #  Asegurar encabezados
-    # ============================
-    ensure_headers(SHEET, EXPECTED_HEADERS)
-    ensure_headers("checkin_activos", ["Equipo", "Realizado_por", "hora_inicio"])
-
     st.header("🛠 Mantenimientos")
 
-    df = pd.DataFrame(read_sheet(SHEET))
+    # =======================
+    #   Datos dinámicos
+    # =======================
+    cfg = read_sheet("config")
+    equipos = sorted({c["Equipo"] for c in cfg if c.get("Equipo")})
+    tecnicos = sorted({c["Tecnico"] for c in cfg if c.get("Tecnico")})
 
-    if df.empty:
-        st.info("Aún no hay mantenimientos registrados.")
+    # ====================================
+    #       CHECK-IN / CHECK-OUT
+    # ====================================
+    st.subheader("⏱ Control de tiempos")
 
-    # ========================================
-    #         FORMULARIO MANUAL 
-    # ========================================
-    st.subheader("➕ Registrar Mantenimiento Manual")
-
-    # Campos dinámicos
-    equipos = sorted({x.get("Equipo","") for x in df.to_dict('records')})
-    tecnicos = ["Wesley Cunningham", "Misael Lopez", "Eduardo Vazquez"]
-
-    equipo_sel = st.selectbox("Equipo", equipos + ["Agregar nuevo"], key="equipo_manual")
-
-    if equipo_sel == "Agregar nuevo":
-        equipo_sel = st.text_input("Nuevo equipo")
-
-    tipo_sel = st.selectbox("Tipo de Mantenimiento", ["Correctivo","Preventivo","Predictivo"], key="tipo_man")
-
-    tecnico_sel = st.selectbox("Realizado por", tecnicos + ["Agregar nuevo"], key="tec_man")
-    if tecnico_sel == "Agregar nuevo":
-        tecnico_sel = st.text_input("Nuevo técnico")
-
-    if st.button("Guardar Mantenimiento Manual"):
-        row = [
-            datetime.now().strftime("%Y-%m-%d"),
-            equipo_sel,
-            tipo_sel,
-            tecnico_sel,
-            "Completado",
-            0,
-            "",
-            ""
-        ]
-        append_row(SHEET, row)
-        st.success("Guardado correctamente.")
-        st.rerun()
-
-    # ========================================
-    #         CHECK-IN ACTIVO
-    # ========================================
-    st.subheader("⏱ Check-in / Check-out")
+    equipo_sel = st.selectbox("Equipo", equipos)
+    tecnico_sel = st.selectbox("Técnico", tecnicos)
 
     activos = get_active_checkins()
-    equipos_activos = [a["Equipo"] for a in activos]
+    activo = next((x for x in activos if x["Equipo"] == equipo_sel), None)
 
-    equipo_ci = st.selectbox("Equipo", equipos + ["Agregar nuevo"], key="equipo_ci")
+    if activo:
+        st.warning(f"🔴 Check-in activo desde {activo['hora_inicio']}")
 
-    if equipo_ci == "Agregar nuevo":
-        equipo_ci = st.text_input("Nuevo equipo para Check-in")
-
-    tecnico_ci = st.selectbox("Técnico", tecnicos + ["Agregar nuevo"], key="tecc_ci")
-    if tecnico_ci == "Agregar nuevo":
-        tecnico_ci = st.text_input("Nuevo técnico")
-
-    # SI EL EQUIPO YA ESTÁ EN CHECK-IN
-    if equipo_ci in equipos_activos:
-        st.warning("Este equipo ya tiene un check-in activo.")
-
-        row_number = equipos_activos.index(equipo_ci) + 2
-
-        descripcion = st.selectbox("Tipo de Mantenimiento", ["Correctivo","Preventivo","Predictivo"], key="tipo_fin")
-        estatus = st.selectbox("Estatus", ["Completado","Cancelado"], key="est_fin")
-
-        if st.button("✔ Finalizar Check-out"):
-            if finalize_checkin(row_number, descripcion, estatus):
+        if st.button("Finalizar Check-Out"):
+            rownum = activos.index(activo) + 2
+            if finalize_checkin(rownum):
                 st.success("Check-out registrado.")
                 st.rerun()
 
     else:
-        if st.button("⏱ Iniciar Check-in"):
-            start_checkin(equipo_ci, tecnico_ci)
+        if st.button("Iniciar Check-In"):
+            add_active_checkin(equipo_sel, tecnico_sel)
             st.success("Check-in iniciado.")
             st.rerun()
 
-    # ========================================
-    #          HISTORIAL
-    # ========================================
-    st.subheader("📘 Historial de Mantenimientos")
+    st.divider()
 
-    df = pd.DataFrame(read_sheet(SHEET))
-    
-    if not df.empty:
-        st.dataframe(df, width="stretch")
+    # ====================================
+    #      REGISTRO MANUAL
+    # ====================================
+    st.subheader("📝 Registro Manual")
+
+    fecha = st.date_input("Fecha")
+    equipo = st.selectbox("Equipo (manual)", equipos)
+    tipo = st.selectbox("Tipo", ["Correctivo", "Preventivo", "Predictivo"])
+    tecnico = st.selectbox("Técnico", tecnicos)
+    descripcion = st.text_area("Descripción")
+    tiempo = st.number_input("Tiempo (hrs)", min_value=0.0)
+
+    if st.button("Guardar mantenimiento"):
+        row = [
+            fecha.strftime("%Y-%m-%d"),
+            equipo,
+            tipo,
+            tecnico,
+            "Completado",
+            tiempo,
+            "",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ]
+        append_row("mantenimientos", row)
+        st.success("Mantenimiento guardado.")
+        st.rerun()
+
+    st.divider()
+
+    # ====================================
+    #     HISTORIAL
+    # ====================================
+    st.subheader("📚 Historial")
+
+    data = read_sheet("mantenimientos")
+    if not data:
+        st.info("No hay datos.")
+        return
+
+    df = pd.DataFrame(data)
+    st.dataframe(df, width="stretch")
