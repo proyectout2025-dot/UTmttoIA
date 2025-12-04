@@ -1,57 +1,40 @@
-# tabs/config.py
+# ===========================================
+# /tabs/config.py — FINAL (con AutoFix)
+# ===========================================
+
 import streamlit as st
-import pandas as pd
-from utils import read_sheet, append_sheet, get_gs_client, SHEET_URL
+from utils import get_gs_client, SHEET_URL
 
-EXPECTED = {
-    "mantenimientos": ["Fecha","Equipo","Descripcion","Realizado_por","estatus","tiempo_hrs","hora_inicio","hora_fin","Tipo"],
-    "checkin_activos": ["Fecha","Equipo","Descripcion","Realizado_por","hora_inicio"],
-    "refacciones": ["Codigo","Nombre","Descripcion","Ubicacion","Stock","ArchivoID"],
-    "config": ["Parametro","Valor"]
-}
 
-def _ensure_headers(sheet_name, headers):
+def fix_sheet(sheet_name, headers):
     try:
         client = get_gs_client()
         sh = client.open_by_url(SHEET_URL)
-        try:
-            ws = sh.worksheet(sheet_name)
-            current = ws.row_values(1)
-            current = [c.strip() for c in current]
-            if current != headers:
-                try:
-                    ws.delete_rows(1)
-                except Exception:
-                    pass
-                ws.insert_row(headers, index=1)
-        except:
-            # create sheet and insert headers
-            sh.add_worksheet(title=sheet_name, rows=1000, cols=20)
-            ws = sh.worksheet(sheet_name)
-            ws.insert_row(headers, index=1)
+        ws = sh.worksheet(sheet_name)
+        ws.update("1:1", [headers])
+        st.success(f"✔ Hoja '{sheet_name}' reparada.")
     except Exception as e:
-        st.error(f"Error asegurando encabezados: {e}")
+        st.error(f"❌ Error reparando hoja '{sheet_name}': {e}")
 
-def autofix_headers_ui():
-    st.header("🔧 Auto-Fix de Encabezados")
-    st.write("Asegura que las hojas tengan las columnas esperadas (solo modifica fila 1).")
-    for k,v in EXPECTED.items():
-        st.write(f"**{k}**: {', '.join(v)}")
-    if st.button("Ejecutar Auto-Fix (todas las hojas)"):
-        for k,v in EXPECTED.items():
-            _ensure_headers(k, v)
-        st.success("Auto-fix ejecutado.")
 
 def show_config():
-    st.header("⚙️ Configuración")
-    st.write("Herramientas administrativas")
-    autofix_headers_ui()
+    st.header("⚙️ Configuración y AutoFix")
 
-    st.markdown("---")
-    st.subheader("Contenido de config")
-    data = read_sheet("config") or []
-    if data:
-        df = pd.DataFrame(data)
-        st.dataframe(df, width="stretch")
-    else:
-        st.info("No hay parámetros guardados en config.")
+    st.write("Usa esta sección para corregir automáticamente las hojas del documento.")
+
+    if st.button("🔧 Reparar hoja: mantenimientos"):
+        fix_sheet("mantenimientos", [
+            "Fecha", "Equipo", "Descripcion", "Realizado_por",
+            "estatus", "tiempo_hrs", "hora_inicio", "hora_fin"
+        ])
+
+    if st.button("🔧 Reparar hoja: refacciones"):
+        fix_sheet("refacciones", [
+            "Numero_parte", "Parte_cliente", "Descripcion",
+            "Ubicacion", "Existencias"
+        ])
+
+    if st.button("🔧 Reparar hoja: checkin_activos"):
+        fix_sheet("checkin_activos", [
+            "equipo", "realizado_por", "hora_inicio"
+        ])
