@@ -41,8 +41,8 @@ def show_mantenimientos():
 
         if st.button("Finalizar Check-Out"):
             try:
-                rownum = activos.index(activo) + 2
-                if finalize_checkin(rownum):
+                finalize_checkin(equipo_sel)
+:
                     st.success("Check-out registrado.")
                     st.rerun()
             except Exception as e:
