@@ -69,44 +69,69 @@ def add_active_checkin(equipo, realizado_por):
     append_row("checkin_activos", row)
 
 
-def finalize_checkin(rownum, descripcion="Trabajo completado"):
-    """Cierra check-in → registra mantenimiento."""
+def finalize_checkin(equipo, descripcion=""):
+    """
+    Finaliza un check-in usando búsqueda real en Google Sheets.
+    Evita index errors y no depende del índice en Python.
+    """
+
     try:
         client = get_gs_client()
         sh = client.open_by_url(SHEET_URL)
         ws = sh.worksheet("checkin_activos")
 
+        # Buscar fila real
+        cells = ws.findall(equipo)
+
+        if not cells:
+            st.error("No se encontró un check-in activo para este equipo.")
+            return False
+
+        # Tomamos el primer match REAL del sheet
+        rownum = cells[0].row
+
+        # Leer encabezados
         headers = ws.row_values(1)
-        rowvals = ws.row_values(rownum)
+        row = ws.row_values(rownum)
 
-        entry = {headers[i]: rowvals[i] for i in range(len(headers))}
+        entry = {
+            headers[i]: row[i] if i < len(row) else ""
+            for i in range(len(headers))
+        }
 
-        equipo = entry["Equipo"]
-        tecnico = entry["Realizado_por"]
-        hinicio = entry["hora_inicio"]
+        # Información del check-in
+        equipo = entry.get("Equipo", "")
+        tecnico = entry.get("Realizado_por", "")
+        hora_inicio_str = entry.get("hora_inicio", "")
 
-        inicio_dt = datetime.strptime(hinicio, "%Y-%m-%d %H:%M:%S")
+        try:
+            inicio_dt = datetime.strptime(hora_inicio_str, "%Y-%m-%d %H:%M:%S")
+        except:
+            inicio_dt = datetime.now()
+
         fin_dt = datetime.now()
-
         horas = round((fin_dt - inicio_dt).total_seconds() / 3600, 2)
 
-        mantenimiento_row = [
+        # Fila para mantenimientos
+        row_to_save = [
             inicio_dt.strftime("%Y-%m-%d"),
             equipo,
-            descripcion,
+            tipo if descripcion == "" else descripcion,
             tecnico,
-            "Completado",
+            descripcion if descripcion != "" else "Check-out",
             horas,
-            hinicio,
+            hora_inicio_str,
             fin_dt.strftime("%Y-%m-%d %H:%M:%S")
         ]
 
-        append_row("mantenimientos", mantenimiento_row)
+        append_row("mantenimientos", row_to_save)
 
+        # Borrar check-in activo
         ws.delete_rows(rownum)
         read_sheet.clear()
+
         return True
 
     except Exception as e:
-        st.error(f"❌ Error finalizando check-in: {e}")
+        st.error(f"Error finalizando check-in: {e}")
         return False
