@@ -106,7 +106,7 @@ def check_in(df):
         tecnico_final = st.text_input("Nuevo técnico", key="ci_tecnico_nuevo")
 
     activos = get_active_checkins()
-    activo = next((a for a in activos if a["equipo"] == equipo_final), None)
+    activo = next((a for a in activos if a.get("equipo") == equipo_final), None)
 
     # Ya existe check-in → ofrecer check-out
     if activo:
