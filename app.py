@@ -1,4 +1,5 @@
 import streamlit as st
+
 from tabs.mantenimientos import show_mantenimientos
 from tabs.refacciones import show_refacciones
 from tabs.config import show_config
@@ -6,17 +7,17 @@ from tabs.config import show_config
 st.set_page_config(page_title="Sistema de Mantenimientos", layout="wide")
 st.title("🔧 Sistema de Mantenimiento UT — IA")
 
-tabs = st.tabs([
+tab1, tab2, tab3 = st.tabs([
     "🛠 Mantenimientos",
     "🔩 Refacciones",
     "⚙️ Configuración"
 ])
 
-with tabs[0]:
+with tab1:
     show_mantenimientos()
 
-with tabs[1]:
+with tab2:
     show_refacciones()
 
-with tabs[2]:
+with tab3:
     show_config()
