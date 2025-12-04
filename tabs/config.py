@@ -1,40 +1,46 @@
-# ===========================================
-# /tabs/config.py — FINAL (con AutoFix)
-# ===========================================
-
+# tabs/config.py
 import streamlit as st
-from utils import get_gs_client, SHEET_URL
+import pandas as pd
+from utils import read_sheet, append_sheet, get_gs_client, SHEET_URL, EXPECTED_HEADERS as EXP
 
-
-def fix_sheet(sheet_name, headers):
+def _ensure_headers(sheet_name, headers):
     try:
         client = get_gs_client()
         sh = client.open_by_url(SHEET_URL)
-        ws = sh.worksheet(sheet_name)
-        ws.update("1:1", [headers])
-        st.success(f"✔ Hoja '{sheet_name}' reparada.")
+        try:
+            ws = sh.worksheet(sheet_name)
+            cur = ws.row_values(1)
+            cur = [c.strip() for c in cur]
+            if cur != headers:
+                try:
+                    ws.delete_rows(1)
+                except Exception:
+                    pass
+                ws.insert_row(headers, index=1)
+        except:
+            sh.add_worksheet(title=sheet_name, rows=1000, cols=20)
+            ws = sh.worksheet(sheet_name)
+            ws.insert_row(headers, index=1)
     except Exception as e:
-        st.error(f"❌ Error reparando hoja '{sheet_name}': {e}")
-
+        st.error(f"Error asegurando encabezados: {e}")
 
 def show_config():
-    st.header("⚙️ Configuración y AutoFix")
+    st.header("⚙️ Configuración y Auto-Fix")
 
-    st.write("Usa esta sección para corregir automáticamente las hojas del documento.")
+    st.write("Encabezados esperados:")
+    for k, v in EXP.items():
+        st.write(f"- **{k}**: {', '.join(v)}")
 
-    if st.button("🔧 Reparar hoja: mantenimientos"):
-        fix_sheet("mantenimientos", [
-            "Fecha", "Equipo", "Descripcion", "Realizado_por",
-            "estatus", "tiempo_hrs", "hora_inicio", "hora_fin"
-        ])
+    if st.button("Ejecutar Auto-Fix (asegurar hojas)"):
+        for k, v in EXP.items():
+            _ensure_headers(k, v)
+        st.success("Auto-Fix ejecutado en todas las hojas.")
 
-    if st.button("🔧 Reparar hoja: refacciones"):
-        fix_sheet("refacciones", [
-            "Numero_parte", "Parte_cliente", "Descripcion",
-            "Ubicacion", "Existencias"
-        ])
-
-    if st.button("🔧 Reparar hoja: checkin_activos"):
-        fix_sheet("checkin_activos", [
-            "equipo", "realizado_por", "hora_inicio"
-        ])
+    st.markdown("---")
+    st.subheader("Parámetros guardados en config")
+    data = read_sheet("config") or []
+    if data:
+        df = pd.DataFrame(data)
+        st.dataframe(df, width="stretch")
+    else:
+        st.info("No hay parámetros guardados.")
