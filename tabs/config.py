@@ -1,25 +1,31 @@
 import streamlit as st
 import pandas as pd
-from utils import read_sheet, append_row, ensure_headers
+from utils import read_sheet, append_row
 
-SHEET = "config"
-
-EXPECTED_HEADERS = ["Tipo", "Valor"]
 
 def show_config():
-    ensure_headers(SHEET, EXPECTED_HEADERS)
+    st.header("⚙️ Configuración")
 
-    st.header("⚙ Configuración")
+    config = read_sheet("config")
+    df = pd.DataFrame(config)
 
-    tipo = st.text_input("Tipo de parámetro")
-    valor = st.text_input("Valor")
+    st.subheader("📦 Equipos y Técnicos Registrados")
+    st.dataframe(df, width="stretch")
 
-    if st.button("Guardar Configuración"):
-        append_row(SHEET, [tipo, valor])
-        st.success("Guardado.")
+    st.divider()
+
+    # ---------------------------
+    st.subheader("➕ Agregar Equipo")
+    new_equipo = st.text_input("Nuevo Equipo:")
+    if st.button("Guardar Equipo"):
+        append_row("config", [new_equipo, ""])
+        st.success("Equipo agregado.")
         st.rerun()
 
-    st.subheader("Datos actuales")
-    df = pd.DataFrame(read_sheet(SHEET))
-    if not df.empty:
-        st.dataframe(df, width="stretch")
+    # ---------------------------
+    st.subheader("➕ Agregar Técnico")
+    new_tec = st.text_input("Nuevo Técnico:")
+    if st.button("Guardar Técnico"):
+        append_row("config", ["", new_tec])
+        st.success("Técnico agregado.")
+        st.rerun()
