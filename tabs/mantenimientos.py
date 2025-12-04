@@ -1,210 +1,247 @@
+# tabs/mantenimientos.py
 import streamlit as st
 import pandas as pd
+import matplotlib.pyplot as plt
+from io import BytesIO
 from datetime import datetime
+
 from utils import (
     read_sheet,
     append_row,
+    append_sheet,
     get_active_checkins,
     add_active_checkin,
-    finalize_active_checkin
+    finalize_active_checkin_by_rownum,
+    get_gs_client,
+    SHEET_URL
 )
-
-
-# ============================================================
-# CONFIGURACIÓN Y LISTAS BASE
-# ============================================================
 
 TIPOS_MTTO = ["Correctivo", "Preventivo", "Predictivo"]
 
-TECNICOS_BASE = [
-    "Wesley Cunningham",
-    "Misael Lopez",
-    "Eduardo Vazquez",
-    "Agregar nuevo técnico..."
-]
+def _df_to_excel_bytes(df: pd.DataFrame) -> BytesIO:
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="mantenimientos")
+    buf.seek(0)
+    return buf
 
-EQUIPOS_BASE = [
-    "Equipo 1",
-    "Equipo 2",
-    "Equipo 3",
-    "Agregar nuevo equipo..."
-]
+def _load_equipos():
+    cfg = read_sheet("config") or []
+    defaults = ["Equipo 1", "Equipo 2", "Equipo 3"]
+    equipos = list(defaults)
+    for r in cfg:
+        if r.get("Parametro","").lower() == "equipo":
+            v = r.get("Valor","")
+            if v and v not in equipos:
+                equipos.append(v)
+    equipos.append("Agregar nuevo equipo")
+    return equipos
 
-
-# ============================================================
-# FUNCIÓN PRINCIPAL DE LA PESTAÑA
-# ============================================================
+def _load_tecnicos():
+    cfg = read_sheet("config") or []
+    defaults = ["Wesley Cunningham", "Misael Lopez", "Eduardo Vazquez"]
+    tecnicos = list(defaults)
+    for r in cfg:
+        if r.get("Parametro","").lower() == "tecnico":
+            v = r.get("Valor","")
+            if v and v not in tecnicos:
+                tecnicos.append(v)
+    tecnicos.append("Agregar nuevo técnico")
+    return tecnicos
 
 def show_mantenimientos():
-    st.title("🛠 Módulo de Mantenimientos")
+    st.header("🛠 Mantenimientos — Registro, Tiempos y Reportes")
 
-    st.write("Registra mantenimientos y controla tiempos con Check-In / Check-Out.")
+    # ensure headers (utils autofix runs on read/write)
 
-    # --------------------------------------------------------
-    # Cargar datos
-    # --------------------------------------------------------
-    data = read_sheet("mantenimientos")
-    df = pd.DataFrame(data) if data else pd.DataFrame()
+    # --- Form manual
+    equipos = _load_equipos()
+    tecnicos = _load_tecnicos()
 
-    activos = get_active_checkins()
+    with st.form("manual_form", clear_on_submit=True):
+        col1, col2 = st.columns([2,1])
+        with col1:
+            fecha = st.date_input("Fecha", value=datetime.now().date())
+            equipo = st.selectbox("Equipo", options=equipos, key="manual_equipo")
+            if equipo == "Agregar nuevo equipo":
+                equipo_nuevo = st.text_input("Nombre del nuevo equipo", key="manual_equipo_nuevo")
+            else:
+                equipo_nuevo = None
+            tipo = st.selectbox("Tipo de mantenimiento", TIPOS_MTTO)
+            descripcion = st.text_area("Descripción (breve)", max_chars=300)
+        with col2:
+            tecnico = st.selectbox("Realizado por", options=tecnicos, key="manual_tecnico")
+            if tecnico == "Agregar nuevo técnico":
+                tecnico_nuevo = st.text_input("Nombre del nuevo técnico", key="manual_tecnico_nuevo")
+            else:
+                tecnico_nuevo = None
+            estatus = st.selectbox("Estatus", ["Completado", "En proceso", "Pendiente"])
+            tiempo = st.number_input("Tiempo (hrs)", min_value=0.0, step=0.25)
 
-    # --------------------------------------------------------
-    # SECCIÓN: CHECK-IN / CHECK-OUT
-    # --------------------------------------------------------
+        submitted = st.form_submit_button("Guardar mantenimiento")
+    if submitted:
+        final_equipo = equipo_nuevo.strip() if equipo_nuevo else equipo
+        final_tecnico = tecnico_nuevo.strip() if tecnico_nuevo else tecnico
 
-    st.subheader("⏱ Control de Tiempos (Check-In / Check-Out)")
+        if equipo_nuevo:
+            append_sheet("config", {"Parametro":"equipo","Valor":final_equipo})
+        if tecnico_nuevo:
+            append_sheet("config", {"Parametro":"tecnico","Valor":final_tecnico})
 
-    # Selección de equipo
-    equipo_sel = st.selectbox("Seleccione el equipo:", EQUIPOS_BASE)
+        row = {
+            "Fecha": str(fecha),
+            "Equipo": final_equipo,
+            "Descripcion": descripcion,
+            "Realizado_por": final_tecnico,
+            "estatus": estatus,
+            "tiempo_hrs": tiempo,
+            "hora_inicio": "",
+            "hora_fin": "",
+            "Tipo": tipo
+        }
+        ok = append_sheet("mantenimientos", row)
+        if ok:
+            st.success("Mantenimiento guardado.")
+            st.experimental_rerun()
+        else:
+            st.error("No se pudo guardar.")
 
-    if equipo_sel == "Agregar nuevo equipo...":
-        equipo_sel = st.text_input("Escriba el nuevo equipo")
-    
-    # Descripción (solo para Check-In)
-    desc_sel = st.selectbox("Tipo de mantenimiento:", TIPOS_MTTO)
+    st.markdown("---")
 
-    # Técnico
-    tecnico_sel = st.selectbox("Técnico:", TECNICOS_BASE)
+    # --- Check-in
+    st.subheader("⏱ Check-In / Check-Out")
+    activos = get_active_checkins() or []
 
-    if tecnico_sel == "Agregar nuevo técnico...":
-        tecnico_sel = st.text_input("Escriba el nombre del técnico")
+    with st.expander("Ver check-ins activos", expanded=False):
+        if activos:
+            df_act = pd.DataFrame(activos)
+            st.dataframe(df_act, width="stretch")
+        else:
+            st.info("No hay check-ins activos.")
 
-    # Determinar si este equipo ya tiene Check-In activo
-    activo_equipo = None
-    for entry in activos:
-        if entry.get("Equipo") == equipo_sel:
-            activo_equipo = entry
-            break
+    with st.form("checkin_form", clear_on_submit=True):
+        ci_equipo = st.selectbox("Equipo (Check-In)", options=equipos, key="ci_equipo")
+        if ci_equipo == "Agregar nuevo equipo":
+            ci_equipo_nuevo = st.text_input("Nombre nuevo equipo (CI)", key="ci_equipo_nuevo")
+        else:
+            ci_equipo_nuevo = None
+        ci_desc = st.text_area("Descripción (CI)", max_chars=250)
+        ci_tecnico = st.selectbox("Técnico (CI)", options=tecnicos, key="ci_tecnico")
+        if ci_tecnico == "Agregar nuevo técnico":
+            ci_tecnico_nuevo = st.text_input("Nombre nuevo técnico (CI)", key="ci_tecnico_nuevo")
+        else:
+            ci_tecnico_nuevo = None
 
-    # Mostrar estado
-    if activo_equipo:
-        st.warning(f"⚠ El equipo **{equipo_sel}** YA tiene Check-In activo desde: **{activo_equipo['hora_inicio']}**")
+        iniciar = st.form_submit_button("Iniciar Check-In")
+    if iniciar:
+        final_equipo_ci = ci_equipo_nuevo.strip() if ci_equipo_nuevo else ci_equipo
+        final_tecnico_ci = ci_tecnico_nuevo.strip() if ci_tecnico_nuevo else ci_tecnico
 
-        # Botón Check-Out
-        if st.button("✔ Finalizar (Check-Out)"):
-            resultado = finalize_active_checkin(equipo_sel)
-            if resultado:
-                horas, descripcion, realizado_por, hora_inicio, hora_fin = resultado
+        # check duplicates
+        exists = any(a.get("Equipo")==final_equipo_ci and a.get("Realizado_por")==final_tecnico_ci for a in activos)
+        if exists:
+            st.warning("Ya existe un check-in activo para este equipo y técnico.")
+        else:
+            if ci_equipo_nuevo:
+                append_sheet("config", {"Parametro":"equipo","Valor":final_equipo_ci})
+            if ci_tecnico_nuevo:
+                append_sheet("config", {"Parametro":"tecnico","Valor":final_tecnico_ci})
+            add_active_checkin(final_equipo_ci, ci_desc, final_tecnico_ci)
+            st.success("Check-In iniciado.")
+            st.experimental_rerun()
 
-                append_row("mantenimientos", [
-                    hora_inicio.split(" ")[0],  # Fecha
-                    equipo_sel,
-                    descripcion,
-                    realizado_por,
-                    "Terminado",
-                    horas,
-                    hora_inicio,
-                    hora_fin
-                ])
+    st.markdown("---")
 
-                st.success(f"Check-Out completado. Tiempo total: **{horas} hrs**")
-
-                st.rerun()
+    # --- Finalizar check-out
+    st.subheader("Finalizar Check-Out")
+    activos = get_active_checkins() or []
+    if activos:
+        choices = [f"{i+2} | {a.get('Equipo','')} | {a.get('Realizado_por','')} | {a.get('hora_inicio','')}" for i,a in enumerate(activos)]
+        sel = st.selectbox("Seleccionar Check-In", options=["--"]+choices, key="sel_check")
+        if sel and sel != "--":
+            rownum = int(sel.split("|")[0].strip())
+            est_final = st.selectbox("Estatus final", ["Completado","Pendiente","Cancelado"], key="est_final")
+            desc_final = st.text_area("Descripción final (opcional)", key="desc_final")
+            if st.button("Finalizar Check-Out"):
+                ok = finalize_active_checkin_by_rownum(rownum, est_final, desc_final)
+                if ok:
+                    st.success("Check-Out finalizado y guardado.")
+                    st.experimental_rerun()
+                else:
+                    st.error("No se pudo finalizar.")
 
     else:
-        if st.button("🔵 Iniciar (Check-In)"):
-            add_active_checkin(equipo_sel, desc_sel, tecnico_sel)
-            st.success("Check-In registrado correctamente.")
-            st.rerun()
+        st.info("No hay check-ins activos.")
 
-    st.write("---")
+    st.markdown("---")
 
-    # --------------------------------------------------------
-    # SECCIÓN: REGISTRO MANUAL DE MANTENIMIENTOS
-    # --------------------------------------------------------
-
-    st.subheader("📝 Registro Manual")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        fecha = st.date_input("Fecha", datetime.now())
-        equipo_manual = st.selectbox("Equipo", EQUIPOS_BASE)
-
-        if equipo_manual == "Agregar nuevo equipo...":
-            equipo_manual = st.text_input("Escriba el nuevo equipo")
-
-    with col2:
-        tipo_manual = st.selectbox("Tipo mantenimiento", TIPOS_MTTO)
-        tecnico_manual = st.selectbox("Técnico", TECNICOS_BASE)
-
-        if tecnico_manual == "Agregar nuevo técnico...":
-            tecnico_manual = st.text_input("Nuevo técnico")
-
-    if st.button("💾 Guardar mantenimiento manual"):
-        append_row("mantenimientos", [
-            fecha.strftime("%Y-%m-%d"),
-            equipo_manual,
-            tipo_manual,
-            tecnico_manual,
-            "Terminado",
-            0,
-            "",  # hora_inicio
-            ""   # hora_fin
-        ])
-
-        st.success("Mantenimiento guardado correctamente.")
-        st.rerun()
-
-    st.write("---")
-
-    # --------------------------------------------------------
-    # SECCIÓN: HISTORIAL Y GRÁFICAS
-    # --------------------------------------------------------
-
-    st.subheader("📊 Historial de Mantenimientos")
-
-    if df.empty:
-        st.info("No hay registros todavía.")
+    # --- Historial y filtros
+    st.subheader("Historial y reportes")
+    df = read_sheet("mantenimientos") or []
+    if not df:
+        st.info("No hay registros.")
         return
+    df = pd.DataFrame(df)
+    if "Fecha" in df.columns:
+        df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce")
 
-    # Filtros
-    with st.expander("🔍 Filtros"):
-        colf1, colf2, colf3 = st.columns(3)
+    # Sidebar filters
+    st.sidebar.header("Filtros")
+    min_date = df["Fecha"].min().date() if "Fecha" in df.columns and not df["Fecha"].isna().all() else None
+    max_date = df["Fecha"].max().date() if "Fecha" in df.columns and not df["Fecha"].isna().all() else None
+    date_range = st.sidebar.date_input("Rango fechas", value=(min_date, max_date) if min_date else ())
+    equipos_filter = st.sidebar.multiselect("Equipo", options=sorted(df["Equipo"].dropna().unique().tolist()) if "Equipo" in df.columns else [], key="f_equipos")
+    tecnicos_filter = st.sidebar.multiselect("Técnico", options=sorted(df["Realizado_por"].dropna().unique().tolist()) if "Realizado_por" in df.columns else [], key="f_tecnicos")
+    estatus_filter = st.sidebar.multiselect("Estatus", options=sorted(df["estatus"].dropna().unique().tolist()) if "estatus" in df.columns else [], key="f_estatus")
+    tipo_filter = st.sidebar.multiselect("Tipo", options=sorted(df["Tipo"].dropna().unique().tolist()) if "Tipo" in df.columns else [], key="f_tipo")
+    search_text = st.sidebar.text_input("Buscar", key="f_search")
 
-        with colf1:
-            equipos_filtro = st.multiselect("Equipo", df["Equipo"].unique())
+    df_filtered = df.copy()
+    if isinstance(date_range, tuple) and len(date_range) == 2 and all(date_range):
+        start, end = date_range
+        df_filtered = df_filtered[(df_filtered["Fecha"].dt.date >= start) & (df_filtered["Fecha"].dt.date <= end)]
+    if equipos_filter:
+        df_filtered = df_filtered[df_filtered["Equipo"].isin(equipos_filter)]
+    if tecnicos_filter:
+        df_filtered = df_filtered[df_filtered["Realizado_por"].isin(tecnicos_filter)]
+    if estatus_filter:
+        df_filtered = df_filtered[df_filtered["estatus"].isin(estatus_filter)]
+    if tipo_filter:
+        df_filtered = df_filtered[df_filtered["Tipo"].isin(tipo_filter)]
+    if search_text:
+        mask = df_filtered.apply(lambda r: search_text.lower() in str(r.get("Descripcion","")).lower()
+                                 or search_text.lower() in str(r.get("Equipo","")).lower()
+                                 or search_text.lower() in str(r.get("Realizado_por","")).lower(), axis=1)
+        df_filtered = df_filtered[mask]
 
-        with colf2:
-            tecnicos_filtro = st.multiselect("Técnico", df["Realizado_por"].unique())
+    st.dataframe(df_filtered, width="stretch")
 
-        with colf3:
-            tipo_filtro = st.multiselect("Tipo", df["Descripcion"].unique())
+    # exports
+    csv_bytes = df_filtered.to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Descargar CSV", csv_bytes, "mantenimientos_filtrado.csv", "text/csv")
+    try:
+        xlsx = _df_to_excel_bytes(df_filtered)
+        st.download_button("📥 Descargar XLSX", xlsx, "mantenimientos_filtrado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception:
+        pass
 
-    filtrado = df.copy()
+    # graficas
+    st.subheader("Gráficas")
+    if "tiempo_hrs" in df_filtered.columns:
+        try:
+            df_filtered["tiempo_hrs"] = pd.to_numeric(df_filtered["tiempo_hrs"], errors="coerce").fillna(0)
+            grp_e = df_filtered.groupby("Equipo")["tiempo_hrs"].sum().sort_values(ascending=False)
+            if not grp_e.empty:
+                fig_e, ax_e = plt.subplots()
+                grp_e.plot(kind="bar", ax=ax_e)
+                ax_e.set_ylabel("Horas")
+                st.pyplot(fig_e)
 
-    if equipos_filtro:
-        filtrado = filtrado[filtrado["Equipo"].isin(equipos_filtro)]
-    if tecnicos_filtro:
-        filtrado = filtrado[filtrado["Realizado_por"].isin(tecnicos_filtro)]
-    if tipo_filtro:
-        filtrado = filtrado[filtrado["Descripcion"].isin(tipo_filtro)]
-
-    # Tabla
-    st.dataframe(filtrado, width="stretch")
-
-    # --------------------------------------------------------
-    # GRÁFICAS
-    # --------------------------------------------------------
-
-    st.subheader("📈 Gráficas")
-
-    if "tiempo_hrs" in filtrado.columns:
-        horas_equipo = filtrado.groupby("Equipo")["tiempo_hrs"].sum()
-        st.bar_chart(horas_equipo)
-
-        horas_tecnico = filtrado.groupby("Realizado_por")["tiempo_hrs"].sum()
-        st.bar_chart(horas_tecnico)
-
-    # --------------------------------------------------------
-    # EXPORTACIÓN
-    # --------------------------------------------------------
-
-    csv = filtrado.to_csv(index=False).encode("utf-8")
-
-    st.download_button(
-        "📥 Descargar historial (CSV)",
-        csv,
-        "historial_mantenimientos.csv",
-        "text/csv"
-    )
+            grp_t = df_filtered.groupby("Realizado_por")["tiempo_hrs"].sum().sort_values(ascending=False)
+            if not grp_t.empty:
+                fig_t, ax_t = plt.subplots()
+                grp_t.plot(kind="bar", ax=ax_t)
+                ax_t.set_ylabel("Horas")
+                st.pyplot(fig_t)
+        except Exception:
+            st.warning("No se pudieron generar algunas gráficas.")
