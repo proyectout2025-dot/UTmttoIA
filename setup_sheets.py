@@ -3,7 +3,7 @@ import streamlit as st
 from utils import get_gs_client, SHEET_URL, EXPECTED_HEADERS
 
 def run_setup():
-    st.header("🧩 Setup inicial - crear hojas y encabezados")
+    st.header("🧩 Setup inicial - crear/asegurar hojas y encabezados")
     if st.button("Crear/Arreglar hojas y encabezados"):
         client = get_gs_client()
         if not client:
