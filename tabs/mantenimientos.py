@@ -31,7 +31,7 @@ def show_mantenimientos():
     st.subheader("⏱ Control de tiempos")
 
     equipo_sel = st.selectbox("Equipo", EQUIPOS, key="equipo_checkin")
-    tecnico_sel = st.selectbox("Técnico", TECNICOS, key="tecnico_checkin")
+    tecnico_sel = st.selectbox("Técnico", TECNICOS, key="tecnico")
 
     activos = get_active_checkins() or []
     activo = next((a for a in activos if a.get("Equipo") == equipo_sel), None)
