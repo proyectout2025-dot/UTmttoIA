@@ -1,90 +1,57 @@
+# tabs/config.py
 import streamlit as st
 import pandas as pd
-from utils import get_gs_client, SHEET_URL
+from utils import read_sheet, append_sheet, get_gs_client, SHEET_URL
 
-# ======================================
-# ENCABEZADOS ESPERADOS POR EL SISTEMA
-# ======================================
-
-EXPECTED_HEADERS = {
-    "mantenimientos": [
-        "Fecha", "Equipo", "Descripcion", "Realizado_por",
-        "estatus", "tiempo_hrs", "hora_inicio", "hora_fin"
-    ],
-
-    "checkin_activos": [
-        "Fecha", "Equipo", "Descripcion", "Realizado_por", "hora_inicio"
-    ],
-
-    "refacciones": [
-        "Codigo", "Nombre", "Descripcion", "Ubicacion", "Stock"
-    ]
+EXPECTED = {
+    "mantenimientos": ["Fecha","Equipo","Descripcion","Realizado_por","estatus","tiempo_hrs","hora_inicio","hora_fin","Tipo"],
+    "checkin_activos": ["Fecha","Equipo","Descripcion","Realizado_por","hora_inicio"],
+    "refacciones": ["Codigo","Nombre","Descripcion","Ubicacion","Stock","ArchivoID"],
+    "config": ["Parametro","Valor"]
 }
 
-
-# ======================================
-# FUNCIÓN AUTO-FIX HEADERS
-# ======================================
-
-def autofix_headers(sheet_name):
-
-    st.subheader(f"🔧 Reparando encabezados: `{sheet_name}`")
-
+def _ensure_headers(sheet_name, headers):
     try:
         client = get_gs_client()
         sh = client.open_by_url(SHEET_URL)
-        ws = sh.worksheet(sheet_name)
-
-        existing = ws.row_values(1)
-        expected = EXPECTED_HEADERS[sheet_name]
-
-        # Normalizar actuales
-        cleaned = [h.strip() for h in existing]
-
-        # Si ya coinciden:
-        if cleaned == expected:
-            st.success("✔ Encabezados correctos.")
-            return True
-
-        # Si faltan columnas:
-        if len(cleaned) < len(expected):
-            cleaned += [""] * (len(expected) - len(cleaned))
-
-        # Reemplazar con los correctos
-        ws.update("1:1", [expected])
-
-        st.success(f"✔ Encabezados reparados correctamente en `{sheet_name}`")
-        return True
-
+        try:
+            ws = sh.worksheet(sheet_name)
+            current = ws.row_values(1)
+            current = [c.strip() for c in current]
+            if current != headers:
+                try:
+                    ws.delete_rows(1)
+                except Exception:
+                    pass
+                ws.insert_row(headers, index=1)
+        except:
+            # create sheet and insert headers
+            sh.add_worksheet(title=sheet_name, rows=1000, cols=20)
+            ws = sh.worksheet(sheet_name)
+            ws.insert_row(headers, index=1)
     except Exception as e:
-        st.error(f"❌ Error corrigiendo encabezados: {e}")
-        return False
+        st.error(f"Error asegurando encabezados: {e}")
 
-
-
-# ======================================
-# INTERFAZ DE CONFIGURACIÓN
-# ======================================
+def autofix_headers_ui():
+    st.header("🔧 Auto-Fix de Encabezados")
+    st.write("Asegura que las hojas tengan las columnas esperadas (solo modifica fila 1).")
+    for k,v in EXPECTED.items():
+        st.write(f"**{k}**: {', '.join(v)}")
+    if st.button("Ejecutar Auto-Fix (todas las hojas)"):
+        for k,v in EXPECTED.items():
+            _ensure_headers(k, v)
+        st.success("Auto-fix ejecutado.")
 
 def show_config():
+    st.header("⚙️ Configuración")
+    st.write("Herramientas administrativas")
+    autofix_headers_ui()
 
-    st.title("⚙️ Configuración del Sistema")
-    st.write("Utilidad para reparar encabezados y validar conexión con Google Sheets.")
-
-    st.subheader("📌 Hojas disponibles")
-    st.table(pd.DataFrame({
-        "Hoja": list(EXPECTED_HEADERS.keys()),
-        "Columnas esperadas": [", ".join(EXPECTED_HEADERS[x]) for x in EXPECTED_HEADERS]
-    }))
-
-    st.write("---")
-    st.subheader("🛠 Reparar encabezados automáticamente")
-
-    # Selección
-    sheet_sel = st.selectbox(
-        "Selecciona la hoja que deseas reparar:",
-        list(EXPECTED_HEADERS.keys())
-    )
-
-    if st.button("🔧 Aplicar Auto-Fix"):
-        autofix_headers(sheet_sel)
+    st.markdown("---")
+    st.subheader("Contenido de config")
+    data = read_sheet("config") or []
+    if data:
+        df = pd.DataFrame(data)
+        st.dataframe(df, width="stretch")
+    else:
+        st.info("No hay parámetros guardados en config.")
