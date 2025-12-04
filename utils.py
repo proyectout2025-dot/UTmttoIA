@@ -1,114 +1,112 @@
 import streamlit as st
-import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
 from datetime import datetime
 
-from utils import (
-    read_sheet,
-    append_row,
-    get_active_checkins,
-    add_active_checkin,
-    finalize_checkin
-)
+# =====================================
+#   GOOGLE AUTH
+# =====================================
+def get_gs_client():
+    try:
+        creds_dict = st.secrets["gcp_service_account"]
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"❌ Error autenticar Google: {e}")
+        return None
 
 
-SHEET = "mantenimientos"
+SHEET_URL = st.secrets["sheets"]["sheet_url"]
 
 
-# ====================================
-# Helpers
-# ====================================
-def load_teams():
-    cfg = read_sheet("config")
-    return [c["Equipo"] for c in cfg] if cfg else []
+# =====================================
+#   READ SHEET
+# =====================================
+@st.cache_data(ttl=10)
+def read_sheet(worksheet_name):
+    """Lee una hoja completa pero con cache para evitar 429."""
+    try:
+        client = get_gs_client()
+        sh = client.open_by_url(SHEET_URL)
+        ws = sh.worksheet(worksheet_name)
+        return ws.get_all_records()
+    except Exception as e:
+        st.error(f"❌ Error leyendo {worksheet_name}: {e}")
+        return []
 
 
-def load_techs():
-    cfg = read_sheet("config")
-    return [c["Tecnico"] for c in cfg] if cfg else []
+# =====================================
+#   APPEND ROW
+# =====================================
+def append_row(worksheet_name, row):
+    """Agrega fila y limpia cache."""
+    try:
+        client = get_gs_client()
+        sh = client.open_by_url(SHEET_URL)
+        ws = sh.worksheet(worksheet_name)
+        ws.append_row(row)
+        read_sheet.clear()
+        return True
+    except Exception as e:
+        st.error(f"❌ Error escribiendo en {worksheet_name}: {e}")
+        return False
 
 
-# ====================================
-# UI PRINCIPAL
-# ====================================
-def show_mantenimientos():
-    st.header("🛠 Mantenimientos")
+# =====================================
+#   CHECK-IN SYSTEM
+# =====================================
+def get_active_checkins():
+    return read_sheet("checkin_activos")
 
-    # ===================
-    #    CHECK-IN ACTIVO
-    # ===================
-    with st.expander("⏱ Control de tiempos — Check-in / Check-out"):
-        equipos = load_teams()
-        tecnicos = load_techs()
 
-        equipo_sel = st.selectbox("Equipo", equipos)
-        tecnico_sel = st.selectbox("Técnico", tecnicos)
+def add_active_checkin(equipo, realizado_por):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    row = [equipo, realizado_por, now]
+    append_row("checkin_activos", row)
 
-        activos = get_active_checkins()
-        activo = next((a for a in activos if a["Equipo"] == equipo_sel), None)
 
-        # -------- CHECK-OUT ---------
-        if activo:
-            st.warning(f"🔴 Check-in activo desde {activo['hora_inicio']}")
+def finalize_checkin(rownum, descripcion="Trabajo completado"):
+    """Cierra check-in → registra mantenimiento."""
+    try:
+        client = get_gs_client()
+        sh = client.open_by_url(SHEET_URL)
+        ws = sh.worksheet("checkin_activos")
 
-            if st.button("🔚 Finalizar Check-out"):
-                row_number = activos.index(activo) + 2  # +2 por encabezado
-                ok = finalize_checkin(row_number, descripcion="Trabajo completado")
+        headers = ws.row_values(1)
+        rowvals = ws.row_values(rownum)
 
-                if ok:
-                    st.success("Check-out registrado correctamente.")
-                    st.rerun()
+        entry = {headers[i]: rowvals[i] for i in range(len(headers))}
 
-        # -------- CHECK-IN ---------
-        else:
-            if st.button("⏱ Iniciar Check-in"):
-                add_active_checkin(equipo_sel, tecnico_sel)
-                st.success("Check-in iniciado.")
-                st.rerun()
+        equipo = entry["Equipo"]
+        tecnico = entry["Realizado_por"]
+        hinicio = entry["hora_inicio"]
 
-    st.divider()
+        inicio_dt = datetime.strptime(hinicio, "%Y-%m-%d %H:%M:%S")
+        fin_dt = datetime.now()
 
-    # ===================
-    #    REGISTRO MANUAL
-    # ===================
-    with st.expander("📝 Registro Manual de Mantenimientos"):
-        equipos = load_teams()
-        tecnicos = load_techs()
+        horas = round((fin_dt - inicio_dt).total_seconds() / 3600, 2)
 
-        fecha = st.date_input("Fecha")
-        equipo = st.selectbox("Equipo", equipos)
-        tipo = st.selectbox("Tipo", ["Correctivo", "Preventivo", "Predictivo"])
-        realizado_por = st.selectbox("Técnico", tecnicos)
-        descripcion = st.text_area("Descripción del trabajo realizado")
-        tiempo = st.number_input("Tiempo (hrs)", min_value=0.0)
+        mantenimiento_row = [
+            inicio_dt.strftime("%Y-%m-%d"),
+            equipo,
+            descripcion,
+            tecnico,
+            "Completado",
+            horas,
+            hinicio,
+            fin_dt.strftime("%Y-%m-%d %H:%M:%S")
+        ]
 
-        if st.button("💾 Guardar mantenimiento"):
-            row = [
-                fecha.strftime("%Y-%m-%d"),
-                equipo,
-                tipo,
-                realizado_por,
-                "Completado",
-                tiempo,
-                "",
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            ]
-            ok = append_row("mantenimientos", row)
+        append_row("mantenimientos", mantenimiento_row)
 
-            if ok:
-                st.success("Guardado correctamente.")
-                st.rerun()
+        ws.delete_rows(rownum)
+        read_sheet.clear()
+        return True
 
-    st.divider()
-
-    # ===================
-    #     HISTORIAL
-    # ===================
-    st.subheader("📚 Historial")
-
-    data = read_sheet("mantenimientos")
-    if not data:
-        st.info("No hay mantenimientos registrados.")
-        return
-
-    df = pd.DataFrame(data)
-    st.dataframe(df, width="stretch")
+    except Exception as e:
+        st.error(f"❌ Error finalizando check-in: {e}")
+        return False
