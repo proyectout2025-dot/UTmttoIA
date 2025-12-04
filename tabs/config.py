@@ -1,46 +1,29 @@
-# tabs/config.py
 import streamlit as st
-import pandas as pd
-from utils import read_sheet, append_sheet, get_gs_client, SHEET_URL, EXPECTED_HEADERS as EXP
+from utils import read_sheet, append_row
 
-def _ensure_headers(sheet_name, headers):
-    try:
-        client = get_gs_client()
-        sh = client.open_by_url(SHEET_URL)
-        try:
-            ws = sh.worksheet(sheet_name)
-            cur = ws.row_values(1)
-            cur = [c.strip() for c in cur]
-            if cur != headers:
-                try:
-                    ws.delete_rows(1)
-                except Exception:
-                    pass
-                ws.insert_row(headers, index=1)
-        except:
-            sh.add_worksheet(title=sheet_name, rows=1000, cols=20)
-            ws = sh.worksheet(sheet_name)
-            ws.insert_row(headers, index=1)
-    except Exception as e:
-        st.error(f"Error asegurando encabezados: {e}")
 
 def show_config():
-    st.header("⚙️ Configuración y Auto-Fix")
+    st.header("⚙️ Configuración del Sistema")
 
-    st.write("Encabezados esperados:")
-    for k, v in EXP.items():
-        st.write(f"- **{k}**: {', '.join(v)}")
+    # Mostrar datos actuales
+    config_data = read_sheet("config")
 
-    if st.button("Ejecutar Auto-Fix (asegurar hojas)"):
-        for k, v in EXP.items():
-            _ensure_headers(k, v)
-        st.success("Auto-Fix ejecutado en todas las hojas.")
+    if config_data:
+        st.subheader("📋 Datos actuales")
+        st.dataframe(config_data, width="stretch")
 
-    st.markdown("---")
-    st.subheader("Parámetros guardados en config")
-    data = read_sheet("config") or []
-    if data:
-        df = pd.DataFrame(data)
-        st.dataframe(df, width="stretch")
-    else:
-        st.info("No hay parámetros guardados.")
+    st.divider()
+    st.subheader("➕ Agregar Equipo / Técnico")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        equipo = st.text_input("Nuevo equipo")
+
+    with col2:
+        tecnico = st.text_input("Nuevo técnico")
+
+    if st.button("💾 Guardar en configuración"):
+        append_row("config", [equipo, tecnico])
+        st.success("Configuración actualizada.")
+        st.rerun()
