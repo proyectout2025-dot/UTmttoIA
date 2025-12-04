@@ -24,15 +24,41 @@ SHEET_URL = st.secrets["sheets"]["sheet_url"]
 # ----------------------------------------
 # Sheets: Lectura / Escritura
 # ----------------------------------------
-def read_sheet(sheet_name):
+def read_sheet(worksheet_name):
     try:
         client = get_gs_client()
         sh = client.open_by_url(SHEET_URL)
-        ws = sh.worksheet(sheet_name)
-        return ws.get_all_records()
+        ws = sh.worksheet(worksheet_name)
+        data = ws.get_all_records()
+
+        if not data:
+            return []
+
+        # 🔥 Autofix de columnas para checkin_activos
+        if worksheet_name == "checkin_activos":
+            fixed = []
+            for row in data:
+                nuevo = {}
+
+                # Normalizar claves
+                for k, v in row.items():
+                    key = k.strip().lower().replace(" ", "_")
+                    nuevo[key] = v
+
+                # Garantizar campos mínimos
+                nuevo.setdefault("equipo", "")
+                nuevo.setdefault("realizado_por", "")
+                nuevo.setdefault("hora_inicio", "")
+
+                fixed.append(nuevo)
+
+            return fixed
+
+        return data
+
     except Exception as e:
-        st.error(f"Error leyendo hoja {sheet_name}: {e}")
-        return []
+        st.error(f"❌ Error leyendo Google Sheets ({worksheet_name}): {e}")
+        return None
 
 def append_row(sheet_name, row):
     try:
@@ -66,3 +92,4 @@ def finalize_active_checkin(equipo):
             return horas, a["realizado_por"], a["hora_inicio"], now.strftime("%Y-%m-%d %H:%M:%S")
 
     return None
+
