@@ -1,97 +1,58 @@
-import streamlit as st
-import gspread
-from google.oauth2.service_account import Credentials
-from datetime import datetime
+def finalize_active_checkin_by_rownum(row_number, estatus="Completado", descripcion_override="Mantenimiento"):
+    """
+    Finaliza un check-in usando solo 2 lecturas del sheet.
+    No usa get_all_records() para evitar error 429.
+    """
 
-# ===========================================================
-#              AUTENTICACIÓN GOOGLE
-# ===========================================================
-def get_gs_client():
-    """Autentica utilizando las credenciales almacenadas en st.secrets."""
-    try:
-        creds_dict = st.secrets["gcp_service_account"]
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        client = gspread.authorize(creds)
-        return client
-    except Exception as e:
-        st.error(f"❌ Error autenticando Google: {e}")
-        return None
-
-
-SHEET_URL = st.secrets["sheets"]["sheet_url"]
-
-
-# ===========================================================
-#                       READ SHEET
-# ===========================================================
-@st.cache_data(ttl=5)
-def read_sheet(worksheet_name):
     try:
         client = get_gs_client()
         sh = client.open_by_url(SHEET_URL)
-        ws = sh.worksheet(worksheet_name)
-        data = ws.get_all_records()
-        return data
-    except Exception as e:
-        st.error(f"❌ Error leyendo Google Sheets ({worksheet_name}): {e}")
-        return []
+        ws = sh.worksheet("checkin_activos")
 
+        # Leer encabezados
+        headers = ws.row_values(1)
 
-# ===========================================================
-#                     APPEND ROW
-# ===========================================================
-def append_row(worksheet_name, row):
-    try:
-        client = get_gs_client()
-        sh = client.open_by_url(SHEET_URL)
-        ws = sh.worksheet(worksheet_name)
-        ws.append_row(row)
-        read_sheet.clear()  # Limpia cache
-        return True
-    except Exception as e:
-        st.error(f"❌ Error guardando en Google Sheets ({worksheet_name}): {e}")
-        return False
+        # Leer solo la fila correspondiente
+        row_vals = ws.row_values(row_number)
 
+        entry = {
+            headers[i]: row_vals[i] if i < len(row_vals) else ""
+            for i in range(len(headers))
+        }
 
-# ===========================================================
-#                     CHECK-IN / CHECK-OUT
-# ===========================================================
-def get_active_checkins():
-    data = read_sheet("checkin_activos")
-    return data if data else []
+        equipo = entry.get("Equipo", "")
+        realizado_por = entry.get("Realizado_por", "")
+        hora_inicio_str = entry.get("hora_inicio", "")
+        tipo = entry.get("Tipo", "General")
 
+        # Convertir hora de inicio
+        try:
+            inicio_dt = datetime.strptime(hora_inicio_str, "%Y-%m-%d %H:%M:%S")
+        except:
+            inicio_dt = datetime.now()
 
-def add_active_checkin(equipo, realizado_por, tipo):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    row = [equipo, realizado_por, now, tipo]
-    append_row("checkin_activos", row)
-
-
-def finalize_checkin(row_data):
-    """Finaliza un registro activo y lo mueve a mantenimientos."""
-    try:
-        inicio_dt = datetime.strptime(row_data["hora_inicio"], "%Y-%m-%d %H:%M:%S")
         fin_dt = datetime.now()
-
         horas = round((fin_dt - inicio_dt).total_seconds() / 3600, 2)
 
+        # Fila final que guardaremos en MANTENIMIENTOS
         row_to_save = [
-            inicio_dt.strftime("%Y-%m-%d"),
-            row_data["Equipo"],
-            row_data["Descripcion"],
-            row_data["Realizado_por"],
-            "Completado",
+            inicio_dt.strftime("%Y-%m-%d"),     # Fecha
+            equipo,
+            descripcion_override,               # Descripcion
+            realizado_por,
+            estatus,
             horas,
-            row_data["hora_inicio"],
+            hora_inicio_str,
             fin_dt.strftime("%Y-%m-%d %H:%M:%S"),
-            row_data.get("Tipo", "")
+            tipo
         ]
 
         append_row("mantenimientos", row_to_save)
+
+        # Borrar check-in activo
+        ws.delete_rows(row_number)
+        read_sheet.clear()  # Limpia cache
+
         return True
 
     except Exception as e:
