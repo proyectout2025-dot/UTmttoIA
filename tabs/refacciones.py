@@ -1,49 +1,46 @@
-# ===========================================
-# /tabs/refacciones.py — FINAL
-# ===========================================
-
+# tabs/refacciones.py
 import streamlit as st
 import pandas as pd
-from utils import read_sheet, append_row
+from utils import read_sheet, append_sheet, upload_file_to_drive
 
 SHEET = "refacciones"
-
-def load_df():
-    data = read_sheet(SHEET)
-    if not data:
-        return pd.DataFrame()
-    return pd.DataFrame(data)
 
 def show_refacciones():
     st.header("🔩 Refacciones")
 
-    df = load_df()
+    with st.form("form_refacciones", clear_on_submit=True):
+        num_parte = st.text_input("Número de parte", key="r_num")
+        parte_cliente = st.text_input("Parte del cliente", key="r_cliente")
+        ubicacion = st.text_input("Ubicación", key="r_ubic")
+        existentes = st.number_input("Existencias", min_value=0, step=1, key="r_exist")
+        archivo = st.file_uploader("Adjuntar PDF (opcional)", type=["pdf"], key="r_file")
+        guardar = st.form_submit_button("Guardar refacción", key="r_guardar")
 
-    st.subheader("📦 Registrar nueva refacción")
-    col1, col2 = st.columns(2)
+    if guardar:
+        file_id = ""
+        if archivo:
+            file_id = upload_file_to_drive(archivo, folder_name="Refacciones")
+            if not file_id:
+                st.error("No se pudo subir el archivo.")
+                return
+        row = {
+            "Numero_parte": num_parte,
+            "Parte_cliente": parte_cliente,
+            "Descripcion": "",
+            "Ubicacion": ubicacion,
+            "Existencias": existentes,
+            "ArchivoID": file_id
+        }
+        ok = append_sheet(SHEET, row)
+        if ok:
+            st.success("Refacción guardada.")
+        else:
+            st.error("Error guardando refacción.")
 
-    with col1:
-        num_parte = st.text_input("Número de parte")
-        parte_cliente = st.text_input("Parte del cliente")
-        locacion = st.text_input("Ubicación")
-    with col2:
-        existentes = st.number_input("Existencias", min_value=0, step=1)
-        descripcion = st.text_area("Descripción")
-
-    if st.button("💾 Guardar refacción"):
-        row = [
-            num_parte,
-            parte_cliente,
-            descripcion,
-            locacion,
-            existentes
-        ]
-        append_row(SHEET, row)
-        st.success("Refacción registrada.")
-        st.rerun()
-
-    st.subheader("📋 Inventario actual")
-    if df.empty:
-        st.info("No hay refacciones registradas.")
-    else:
+    st.markdown("---")
+    data = read_sheet(SHEET) or []
+    if data:
+        df = pd.DataFrame(data)
         st.dataframe(df, width="stretch")
+    else:
+        st.info("No hay refacciones registradas.")
