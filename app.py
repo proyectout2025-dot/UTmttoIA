@@ -1,23 +1,26 @@
+# app.py
 import streamlit as st
 
 from tabs.mantenimientos import show_mantenimientos
 from tabs.refacciones import show_refacciones
-from tabs.config import show_config
+from utils import ensure_headers
 
-st.set_page_config(page_title="Sistema de Mantenimientos", layout="wide")
+# Asegurar encabezados UNA vez al inicio (escritura directa)
+ensure_headers("mantenimientos", ["Fecha","Equipo","Descripcion","Realizado_por","estatus","tiempo_hrs","hora_inicio","hora_fin"])
+ensure_headers("checkin_activos", ["Equipo","Realizado_por","hora_inicio","Tipo"])
+ensure_headers("refacciones", ["Fecha","Refaccion","Cantidad","Descripcion","Comentarios","Evidencia_ID"])
+ensure_headers("config", ["Tipo","Valor"])
+
+st.set_page_config(page_title="Sistema de Mantenimiento UT", layout="wide")
 st.title("🔧 Sistema de Mantenimiento UT — IA")
 
-tab1, tab2, tab3 = st.tabs([
-    "🛠 Mantenimientos",
-    "🔩 Refacciones",
-    "⚙️ Configuración"
-])
+tabs = st.tabs(["🛠 Mantenimientos", "🔩 Refacciones", "⚙️ Configuración"])
 
-with tab1:
+with tabs[0]:
     show_mantenimientos()
 
-with tab2:
+with tabs[1]:
     show_refacciones()
 
-with tab3:
-    show_config()
+with tabs[2]:
+    st.info("Configuración mínima (usamos listas fijas en la versión estable).")
